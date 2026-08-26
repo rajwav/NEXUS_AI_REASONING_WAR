@@ -216,16 +216,54 @@ python3 main.py --test
 ======================================================================
  NEXUS AI REASONING WAR — COMPLETE SYSTEM VERIFICATION TEST SUITE 
 ======================================================================
-Ran 36 tests in 0.371s
+Ran 48 tests in 0.496s
 
 OK
 ======================================================================
- TOTAL TESTS RUN : 36
- SUCCESSES      : 36
+ TOTAL TESTS RUN : 48
+ SUCCESSES      : 48
  FAILURES       : 0
  ERRORS         : 0
 ======================================================================
 >> ALL SYSTEMS NOMINAL: 100% OF TESTS PASSED SUCCESSFULLY! <<
 ```
 
-**36/36 Tests Passed**
+**48/48 Tests Passed (36 V1 Core Tests + 12 V2 Auth/Scoring Tests)**
+
+---
+
+## ⚡ Version 2: Authentication, Player Profiles & Cloud Score System
+
+Version 2 introduces persistent player accounts, deterministic scoring, and Supabase PostgreSQL persistence while preserving 100% of the V1 core game reasoning engines:
+
+### 1. Google OAuth2 Authentication & Guest Mode
+- **Guest Mode**: Play immediately without sign-in; scores are saved locally in the active session.
+- **Authenticated Mode**: Sign in via Google OAuth2 / OpenID Connect to synchronize scores, lifetime statistics, and personal high scores across devices.
+- **Session Persistence**: Authentication state persists cleanly across Streamlit page reruns with full logout control.
+
+### 2. Centralized Game Scoring Engine (`Services/scoring_engine.py`)
+- **Deterministic Formulas**:
+  - **Sudoku**: $\text{Score} = \max(0, 1000 \times \text{DiffMult} + \text{SpeedBonus} - 150 \times \text{Mistakes} - 200 \times \text{Hints})$
+  - **Cyber Sokoban**: $\text{Score} = \max(0, 1200 \times \text{DiffMult} + \text{MoveEfficiency} + \text{PushEfficiency} + \text{SpeedBonus})$
+  - **Laser Mirror Routing**: $\text{Score} = \max(0, 1000 \times \text{DiffMult} + \text{RotationEfficiency} + \text{SpeedBonus})$
+  - **Circuit Minesweeper**: $\text{Score} = \max(0, 1000 \times \text{DiffMult} + 250 \times \text{Lives} + 15 \times \text{SafeCleared} + \text{SpeedBonus})$
+  - **Tactical Battle Arena**: $\text{Score} = \max(0, \text{OutcomeBase} \times \text{DiffMult} + \text{MoveEconomyBonus})$
+
+### 3. Database Persistence (`database/schema.sql`)
+- **Schema**: PostgreSQL tables for `players`, `game_scores`, and `game_statistics`.
+- **Durable Deduplication**: `game_session_id` UUID with `UNIQUE` constraint ensures a completed game is persisted exactly once.
+- **Row Level Security**: Policies isolate player statistics and scores.
+
+### 4. Configuration / Secrets Setup
+Add the following to `.streamlit/secrets.toml` or Streamlit Community Cloud Settings:
+
+```toml
+# Google OAuth 2.0 Credentials
+GOOGLE_CLIENT_ID = "your-google-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET = "your-google-client-secret"
+REDIRECT_URI = "https://your-app-url.streamlit.app"
+
+# Supabase PostgreSQL Configuration
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_KEY = "your-supabase-anon-key"
+```
