@@ -16,6 +16,7 @@ from Tests.test_ml import TestMachineLearning
 from Tests.test_missions import TestMissions
 from Tests.test_logic_games import TestLogicGamesSuite
 from Tests.test_ai_solvers import TestAISolvers
+from Tests.test_v2_auth_and_scoring import TestV2AuthAndScoring
 
 
 def run_all_tests():
@@ -32,6 +33,7 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestMissions))
     suite.addTests(loader.loadTestsFromTestCase(TestLogicGamesSuite))
     suite.addTests(loader.loadTestsFromTestCase(TestAISolvers))
+    suite.addTests(loader.loadTestsFromTestCase(TestV2AuthAndScoring))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
