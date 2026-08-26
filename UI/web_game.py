@@ -47,6 +47,9 @@ from AI_Solvers import (
     BattleArenaAISolver
 )
 
+import uuid
+from Services import ScoringEngine, AuthService, PlayerProfile, DatabaseService
+
 
 # ====================================================================
 # CYBERPUNK RESEARCH THEME CSS
@@ -229,6 +232,14 @@ def init_session_state():
         st.session_state.current_game_id = "sudoku"
     if "sudoku_mode" not in st.session_state:
         st.session_state.sudoku_mode = "classic"
+    if "game_session_id" not in st.session_state:
+        st.session_state.game_session_id = str(uuid.uuid4())
+    if "game_start_time" not in st.session_state:
+        st.session_state.game_start_time = time.time()
+    if "submitted_session_ids" not in st.session_state:
+        st.session_state.submitted_session_ids = set()
+    if "guest_scores" not in st.session_state:
+        st.session_state.guest_scores = []
     
     # Engine instances
     if "sudoku_engine" not in st.session_state:
@@ -241,6 +252,173 @@ def init_session_state():
         st.session_state.minesweeper_engine = CircuitMinesweeperEngine(seed=st.session_state.seed, difficulty="intermediate")
     if "battle_engine" not in st.session_state:
         st.session_state.battle_engine = BattleArenaEngine(difficulty=st.session_state.difficulty, seed=st.session_state.seed)
+
+
+def handle_auth_callback():
+    """Handles Google OAuth callback code from URL query params."""
+    try:
+        if hasattr(st, "query_params") and "code" in st.query_params:
+            code = st.query_params["code"]
+            success, profile, msg = AuthService.exchange_code_for_profile(code)
+            if success and profile:
+                db_success, db_player, _ = DatabaseService.sync_player_profile(
+                    profile.provider_user_id, profile.email, profile.display_name, profile.avatar_url
+                )
+                if db_success and db_player:
+                    profile.id = db_player.get("id")
+                AuthService.set_authenticated_user(profile)
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.sidebar.error(f"Auth Notice: {msg}")
+    except Exception:
+        pass
+
+
+def render_player_profile_sidebar():
+    """Renders high-contrast Cyberpunk Player Profile & Auth HUD."""
+    user = AuthService.get_current_user()
+    if user and user.is_authenticated:
+        avatar_html = f'<img src="{user.avatar_url}" style="width:36px; height:36px; border-radius:50%; border:2px solid #00E5FF; margin-right:10px;">' if user.avatar_url else '<div style="width:36px; height:36px; border-radius:50%; border:2px solid #76FF03; display:flex; align-items:center; justify-content:center; background:#0B2247; color:#76FF03; font-weight:800; margin-right:10px;">⚡</div>'
+        
+        st.sidebar.markdown(f"""
+        <div style="background:rgba(4,16,36,0.9); border:1px solid #00E5FF; border-radius:10px; padding:12px; margin-bottom:12px; box-shadow:0 0 15px rgba(0,229,255,0.2);">
+            <div style="display:flex; align-items:center; margin-bottom:6px;">
+                {avatar_html}
+                <div style="overflow:hidden;">
+                    <div style="font-family:'Orbitron'; font-size:12px; font-weight:800; color:#76FF03; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">{user.display_name}</div>
+                    <div style="font-size:10px; color:#94A3B8; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">{user.email}</div>
+                </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; font-family:'Orbitron';">
+                <span style="color:#00E5FF;">CLOUD SYNC:</span>
+                <span style="color:#76FF03; font-weight:700;">● ACTIVE</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        with st.sidebar.expander("🏆 MY STATS & HIGH SCORES", expanded=False):
+            high_scores = DatabaseService.get_player_high_scores(user.id or user.provider_user_id)
+            tot_sc = high_scores.get("total_score", 0)
+            g_won = high_scores.get("games_won", 0)
+            g_play = high_scores.get("games_played", 0)
+            st.markdown(f"**Lifetime Score:** `{tot_sc:,}` pts")
+            st.markdown(f"**Victories:** `{g_won} / {g_play}`")
+            st.markdown("---")
+            for g_name, g_info in high_scores.get("games", {}).items():
+                st.markdown(f"**{g_name.upper()}**: Best `{g_info.get('best_score', 0):,}` pts")
+
+        if st.sidebar.button("🚪 Logout", key="btn_logout", use_container_width=True):
+            AuthService.logout()
+            st.rerun()
+    else:
+        auth_url = AuthService.get_google_auth_url()
+        st.sidebar.markdown(f"""
+        <div style="background:rgba(4,16,36,0.85); border:1px solid rgba(0,229,255,0.3); border-radius:10px; padding:12px; margin-bottom:12px;">
+            <div style="font-family:'Orbitron'; font-size:11px; color:#00E5FF; font-weight:700; margin-bottom:4px;">👤 GUEST AGENT</div>
+            <div style="font-size:11px; color:#94A3B8; margin-bottom:8px;">Scores saved locally. Sign in with Google to persist cloud scores.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if auth_url:
+            st.sidebar.markdown(f"""
+            <a href="{auth_url}" target="_self" style="display:block; text-align:center; background:#0B2247; border:1px solid #76FF03; color:#76FF03; padding:8px 12px; border-radius:6px; font-family:'Orbitron'; font-size:11px; font-weight:800; text-decoration:none; margin-bottom:8px;">
+                ⚡ SIGN IN WITH GOOGLE
+            </a>
+            """, unsafe_allow_html=True)
+
+
+def render_game_score_card(game_name: str, difficulty: str, solved: bool, **kwargs):
+    """Calculates and renders celebratory Cyberpunk score card with durable database submission."""
+    elapsed = max(1, int(time.time() - st.session_state.get("game_start_time", time.time())))
+    score_data = ScoringEngine.calculate_score(
+        game=game_name,
+        difficulty=difficulty,
+        solved=solved,
+        time_seconds=elapsed,
+        **kwargs
+    )
+    
+    session_id = st.session_state.get("game_session_id", str(uuid.uuid4()))
+    user = AuthService.get_current_user()
+    
+    cloud_status_text = ""
+    cloud_status_color = "#94A3B8"
+    
+    # Durable submission (only if not already submitted in this session)
+    if session_id not in st.session_state.submitted_session_ids:
+        st.session_state.submitted_session_ids.add(session_id)
+        if user and user.is_authenticated:
+            p_id = user.id or user.provider_user_id
+            success, msg = DatabaseService.submit_game_score(
+                player_id=p_id,
+                game_session_id=session_id,
+                game=game_name,
+                difficulty=difficulty,
+                score=score_data.get("total_score", 0),
+                time_seconds=elapsed,
+                moves=kwargs.get("moves", kwargs.get("rotations", 0)),
+                mistakes=kwargs.get("mistakes", 0),
+                hints=kwargs.get("hints", 0),
+                seed=st.session_state.seed,
+                solved=solved,
+                metrics_breakdown=score_data
+            )
+            if success:
+                cloud_status_text = "☁️ Synced to Supabase Cloud"
+                cloud_status_color = "#76FF03"
+            else:
+                cloud_status_text = f"⚠️ {msg}"
+                cloud_status_color = "#FFD600"
+        else:
+            st.session_state.guest_scores.append({
+                "game": game_name,
+                "difficulty": difficulty,
+                "score": score_data.get("total_score", 0),
+                "seed": st.session_state.seed,
+                "time": elapsed,
+                "solved": solved
+            })
+            cloud_status_text = "💾 Stored in local guest session"
+            cloud_status_color = "#00E5FF"
+    else:
+        if user and user.is_authenticated:
+            cloud_status_text = "☁️ Synced to Supabase Cloud"
+            cloud_status_color = "#76FF03"
+        else:
+            cloud_status_text = "💾 Stored in local guest session"
+            cloud_status_color = "#00E5FF"
+            
+    tot_score = score_data.get("total_score", 0)
+    summary_text = score_data.get("summary", "")
+    
+    st.markdown(f"""
+    <div style="background:rgba(6,16,36,0.95); border:2px solid #76FF03; border-radius:12px; padding:16px; margin:16px 0; box-shadow:0 0 30px rgba(118,255,3,0.25);">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(118,255,3,0.3); padding-bottom:8px; margin-bottom:12px;">
+            <div>
+                <span style="font-family:'Orbitron'; font-size:14px; font-weight:900; color:#76FF03;">⚡ PROTOCOL COMPLETE — SCORE AUDIT</span>
+                <span style="font-size:12px; color:#94A3B8; margin-left:8px;">Seed #{st.session_state.seed}</span>
+            </div>
+            <span style="font-family:'Orbitron'; font-size:11px; color:{cloud_status_color}; font-weight:700;">{cloud_status_text}</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:10px;">
+            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
+                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">FINAL SCORE</div>
+                <div style="font-size:22px; color:#76FF03; font-weight:900; font-family:'Orbitron';">{tot_score:,}</div>
+            </div>
+            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
+                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">TIME ELAPSED</div>
+                <div style="font-size:22px; color:#00E5FF; font-weight:900; font-family:'Orbitron';">{elapsed}s</div>
+            </div>
+            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
+                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">DIFFICULTY MULTIPLIER</div>
+                <div style="font-size:22px; color:#FFD600; font-weight:900; font-family:'Orbitron';">{score_data.get('difficulty_multiplier', 1.0)}x</div>
+            </div>
+        </div>
+        <div style="background:rgba(0,229,255,0.06); padding:8px 12px; border-radius:6px; font-size:12px; color:#CBD5E1;">
+            <b>Audit Breakdown:</b> {summary_text}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ====================================================================
@@ -3227,6 +3405,8 @@ def render_puzzle_arena_tab():
     )
     if diff_sel != st.session_state.difficulty:
         st.session_state.difficulty = diff_sel
+        st.session_state.game_session_id = str(uuid.uuid4())
+        st.session_state.game_start_time = time.time()
         st.session_state.sudoku_engine.generate_new_puzzle(st.session_state.seed, diff_sel)
         st.session_state.sokoban_engine.load_difficulty(diff_sel, seed=st.session_state.seed)
         st.session_state.laser_engine.generate_level(st.session_state.seed, diff_sel)
@@ -3254,6 +3434,8 @@ def render_puzzle_arena_tab():
         c1, c2 = st.columns(2)
         if c1.button("🎲 New Seed", key="btn_new_seed"):
             st.session_state.seed = random.randint(100000, 999999)
+            st.session_state.game_session_id = str(uuid.uuid4())
+            st.session_state.game_start_time = time.time()
             if st.session_state.current_game_id == "sudoku":
                 st.session_state.sudoku_engine.generate_new_puzzle(st.session_state.seed, st.session_state.difficulty)
             elif st.session_state.current_game_id == "sokoban":
@@ -3268,6 +3450,8 @@ def render_puzzle_arena_tab():
             st.rerun()
 
         if c2.button("🔄 Reset Board", key="btn_reset_board"):
+            st.session_state.game_session_id = str(uuid.uuid4())
+            st.session_state.game_start_time = time.time()
             if st.session_state.current_game_id == "sudoku":
                 st.session_state.sudoku_engine.reset_puzzle()
             elif st.session_state.current_game_id == "sokoban":
@@ -3360,6 +3544,7 @@ def render_puzzle_arena_tab():
                 st.info(f"Recommended column: **Column {ai_res.get('recommended_col', '-')}**\n\n_{ai_res.get('reason', '')}_")
 
             if eng_bt.game_over:
+                outcome_str = "win" if eng_bt.winner == 1 else ("loss" if eng_bt.winner == 2 else "draw")
                 if eng_bt.winner == 1:
                     st.balloons()
                     st.success("🏆 VICTORY! Tactical alignment achieved!")
@@ -3367,6 +3552,13 @@ def render_puzzle_arena_tab():
                     st.error("💀 DEFEAT! AEGIS AI connected 4 first.")
                 else:
                     st.warning("⚡ DRAW! Grid energy saturated.")
+                render_game_score_card(
+                    game_name="battle",
+                    difficulty=st.session_state.difficulty,
+                    solved=(eng_bt.winner == 1 or eng_bt.winner == 0),
+                    outcome=outcome_str,
+                    moves=eng_bt.moves_count
+                )
         st.markdown('</div>', unsafe_allow_html=True)
 
         exp_data = ai_res.get("explanation_data", {})
@@ -3829,7 +4021,9 @@ def main():
     )
     st.markdown(CYBER_THEME_CSS, unsafe_allow_html=True)
     init_session_state()
+    handle_auth_callback()
 
+    render_player_profile_sidebar()
     st.sidebar.markdown("## ⚡ NEXUS RESEARCH LAB")
     st.sidebar.markdown(f"**Current Seed:** `#{st.session_state.seed}`")
     st.sidebar.markdown("---")
