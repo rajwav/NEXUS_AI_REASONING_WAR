@@ -1,0 +1,2 @@
+# NEXUS AI REASONING WAR - Core Dependencies
+streamlit>=1.30.0

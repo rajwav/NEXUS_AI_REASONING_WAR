@@ -1,0 +1,11 @@
+session_id,player_name,velocity,error_rate,hint_dependency,risk_index,autonomy_ratio,archetype,difficulty,success_prob
+NX-101,Dr. Aarav Sharma,0.85,0.18,0.12,0.22,0.85,EXPLORER,NORMAL,0.892
+NX-102,Prof. Meera Iyer,0.32,0.04,0.08,0.05,0.96,STRATEGIST,EXPERT,0.954
+NX-103,Rahul Verma,0.92,0.38,0.04,0.78,0.82,HACKER,HARD,0.812
+NX-104,Ananya Rao,0.38,0.68,0.72,0.35,0.25,BEGINNER,EASY,0.421
+NX-105,Student Cadre A,0.45,0.55,0.60,0.42,0.38,BEGINNER,EASY,0.512
+NX-106,Engineer Vikram,0.88,0.22,0.14,0.30,0.80,EXPLORER,NORMAL,0.875
+NX-107,Lead Analyst Priya,0.28,0.02,0.05,0.08,0.98,STRATEGIST,EXPERT,0.978
+NX-108,Cyber Operator Dev,0.95,0.32,0.06,0.82,0.88,HACKER,HARD,0.840
+NX-109,Trainee Rohan,0.41,0.70,0.78,0.45,0.20,BEGINNER,EASY,0.385
+NX-110,Dr. Aarav Sharma (R2),0.82,0.15,0.10,0.20,0.88,EXPLORER,NORMAL,0.915

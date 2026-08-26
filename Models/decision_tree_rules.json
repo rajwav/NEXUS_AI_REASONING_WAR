@@ -1,0 +1,11 @@
+{
+  "model_type": "DecisionTreeClassifier",
+  "target": "DynamicDifficulty",
+  "rules": [
+    "IF error_rate > 0.35 AND hint_frequency > 0.30 THEN Difficulty = EASY",
+    "IF error_rate > 0.35 AND hint_frequency <= 0.30 THEN Difficulty = NORMAL",
+    "IF error_rate <= 0.35 AND autonomy <= 0.75 THEN Difficulty = HARD",
+    "IF error_rate <= 0.35 AND autonomy > 0.75 AND speed <= 0.60 THEN Difficulty = HARD",
+    "IF error_rate <= 0.35 AND autonomy > 0.75 AND speed > 0.60 THEN Difficulty = EXPERT"
+  ]
+}

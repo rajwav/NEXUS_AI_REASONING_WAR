@@ -1,0 +1,14 @@
+{
+  "model_type": "MultiLayerPerceptron",
+  "architecture": {
+    "input_layer": 5,
+    "hidden_layer": 8,
+    "output_layer": 1,
+    "activation_hidden": "ReLU",
+    "activation_output": "Sigmoid"
+  },
+  "metrics": {
+    "test_accuracy": 0.948,
+    "mean_squared_error": 0.038
+  }
+}

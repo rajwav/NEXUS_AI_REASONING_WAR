@@ -1,0 +1,76 @@
+{
+  "facility": "NEXUS Advanced AI Research Facility",
+  "year": 2088,
+  "missions": [
+    {
+      "id": "M01",
+      "title": "Restore AI Core Power Conduits",
+      "sector": "Sector 1: AI Core Garden",
+      "algorithm": "A* Search vs BFS",
+      "difficulty": "NORMAL"
+    },
+    {
+      "id": "M02",
+      "title": "Digital Crime Investigation: The Rogue Scientist",
+      "sector": "Sector 4: Digital Forensic Lab",
+      "algorithm": "Forward Chaining Inference",
+      "difficulty": "NORMAL"
+    },
+    {
+      "id": "M03",
+      "title": "Quantum Security Vault Laser Calibration",
+      "sector": "Sector 3: Quantum Security Lab",
+      "algorithm": "CSP Backtracking with MRV & Forward Checking",
+      "difficulty": "HARD"
+    },
+    {
+      "id": "M04",
+      "title": "Combat Simulation: Defeat Sentry Bot ARES-7",
+      "sector": "Sector 2: Robot Training Arena",
+      "algorithm": "Minimax with Alpha-Beta Pruning",
+      "difficulty": "HARD"
+    },
+    {
+      "id": "M05",
+      "title": "Quarantine Spreading Cyber-Malware",
+      "sector": "Sector 5: Network Control Center",
+      "algorithm": "Graph Theory & Edmonds-Karp Minimum Cut",
+      "difficulty": "HARD"
+    },
+    {
+      "id": "M06",
+      "title": "Recover Fragmented Neural Memory",
+      "sector": "Sector 1: AI Core Garden",
+      "algorithm": "Knowledge Representation & Semantic Ontologies",
+      "difficulty": "NORMAL"
+    },
+    {
+      "id": "M07",
+      "title": "Strategic Dilemma: Ethical Containment Override",
+      "sector": "Sector 6: Final Nexus Chamber",
+      "algorithm": "Decision Theory & Maximum Expected Utility (MEU)",
+      "difficulty": "EXPERT"
+    },
+    {
+      "id": "M08",
+      "title": "Automated Drone Evacuation Planning",
+      "sector": "Sector 2: Robot Training Arena",
+      "algorithm": "STRIPS Automated Planning",
+      "difficulty": "HARD"
+    },
+    {
+      "id": "M09",
+      "title": "Adaptive Machine Learning Firewall Test",
+      "sector": "Sector 3: Quantum Security Lab",
+      "algorithm": "Online Machine Learning & Adversarial Boundary Shift",
+      "difficulty": "HARD"
+    },
+    {
+      "id": "M10",
+      "title": "The Grand Finale: Re-igniting NEXUS Prime",
+      "sector": "Sector 6: Final Nexus Chamber",
+      "algorithm": "Multi-Paradigm AI Synthesis",
+      "difficulty": "EXPERT"
+    }
+  ]
+}
