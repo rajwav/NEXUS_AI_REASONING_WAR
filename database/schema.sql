@@ -1,6 +1,7 @@
 -- ====================================================================
 -- NEXUS AI REASONING WAR (V2) — DATABASE SCHEMA & MIGRATION SCRIPT
--- Database: Supabase PostgreSQL
+-- Target Database: Supabase PostgreSQL (PostgREST API)
+-- Fully Idempotent: Safe to execute on fresh or existing databases
 -- ====================================================================
 
 -- 1. PLAYERS TABLE
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS public.players (
     last_login TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index on email & provider_user_id for fast auth lookup
+-- Performance Indexes for Players
 CREATE INDEX IF NOT EXISTS idx_players_provider ON public.players(provider_user_id);
 CREATE INDEX IF NOT EXISTS idx_players_email ON public.players(email);
 
@@ -22,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_players_email ON public.players(email);
 -- 2. GAME SCORES TABLE
 CREATE TABLE IF NOT EXISTS public.game_scores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    game_session_id TEXT UNIQUE NOT NULL, -- UUID session token preventing duplicate submissions
+    game_session_id TEXT UNIQUE NOT NULL, -- UUID session token enforcing idempotent deduplication
     player_id UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
     game TEXT NOT NULL,                  -- 'sudoku', 'sokoban', 'laser', 'minesweeper', 'battle'
     difficulty TEXT NOT NULL,            -- 'easy', 'medium', 'hard', 'expert', 'nightmare'
@@ -37,14 +38,14 @@ CREATE TABLE IF NOT EXISTS public.game_scores (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Performance Indexes
+-- Performance Indexes for Scores
 CREATE INDEX IF NOT EXISTS idx_game_scores_player ON public.game_scores(player_id);
 CREATE INDEX IF NOT EXISTS idx_game_scores_game_diff ON public.game_scores(game, difficulty);
 CREATE INDEX IF NOT EXISTS idx_game_scores_score ON public.game_scores(score DESC);
 CREATE INDEX IF NOT EXISTS idx_game_scores_session ON public.game_scores(game_session_id);
 
 
--- 3. GAME STATISTICS TABLE (Aggregated Player Lifetime Stats)
+-- 3. GAME STATISTICS TABLE (Aggregated Lifetime Performance)
 CREATE TABLE IF NOT EXISTS public.game_statistics (
     player_id UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
     game TEXT NOT NULL,
@@ -61,28 +62,46 @@ CREATE TABLE IF NOT EXISTS public.game_statistics (
 CREATE INDEX IF NOT EXISTS idx_game_stats_player ON public.game_statistics(player_id);
 
 
--- 4. ROW LEVEL SECURITY (RLS) POLICIES
+-- 4. PERMISSIONS & ROLE GRANTS
+-- Allow PostgREST anon and authenticated roles to access tables under RLS
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT ALL ON TABLE public.players TO anon, authenticated;
+GRANT ALL ON TABLE public.game_scores TO anon, authenticated;
+GRANT ALL ON TABLE public.game_statistics TO anon, authenticated;
+
+
+-- 5. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE public.players ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.game_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.game_statistics ENABLE ROW LEVEL SECURITY;
 
--- Players can read and update their own profile
+-- Players Policies
+DROP POLICY IF EXISTS "Allow individual player read" ON public.players;
 CREATE POLICY "Allow individual player read" ON public.players
-    FOR SELECT USING (auth.uid()::text = provider_user_id OR true);
+    FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Allow individual player insert" ON public.players;
+CREATE POLICY "Allow individual player insert" ON public.players
+    FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow individual player update" ON public.players;
 CREATE POLICY "Allow individual player update" ON public.players
-    FOR UPDATE USING (auth.uid()::text = provider_user_id);
+    FOR UPDATE USING (true);
 
--- Scores: Players can view and insert their own scores
+-- Scores Policies
+DROP POLICY IF EXISTS "Allow player score select" ON public.game_scores;
 CREATE POLICY "Allow player score select" ON public.game_scores
-    FOR SELECT USING (player_id IN (SELECT id FROM public.players WHERE provider_user_id = auth.uid()::text OR true));
+    FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Allow player score insert" ON public.game_scores;
 CREATE POLICY "Allow player score insert" ON public.game_scores
-    FOR INSERT WITH CHECK (player_id IN (SELECT id FROM public.players WHERE provider_user_id = auth.uid()::text OR true));
+    FOR INSERT WITH CHECK (true);
 
--- Statistics: Players can view and update their own stats
+-- Statistics Policies
+DROP POLICY IF EXISTS "Allow player stats select" ON public.game_statistics;
 CREATE POLICY "Allow player stats select" ON public.game_statistics
-    FOR SELECT USING (player_id IN (SELECT id FROM public.players WHERE provider_user_id = auth.uid()::text OR true));
+    FOR SELECT USING (true);
 
-CREATE POLICY "Allow player stats update" ON public.game_statistics
-    FOR ALL USING (player_id IN (SELECT id FROM public.players WHERE provider_user_id = auth.uid()::text OR true));
+DROP POLICY IF EXISTS "Allow player stats upsert" ON public.game_statistics;
+CREATE POLICY "Allow player stats upsert" ON public.game_statistics
+    FOR ALL USING (true);
