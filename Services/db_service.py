@@ -61,8 +61,9 @@ class DatabaseService:
                       method: str = "GET",
                       data: Optional[Dict[str, Any]] = None,
                       params: Optional[Dict[str, str]] = None,
-                      headers_extra: Optional[Dict[str, str]] = None) -> Tuple[bool, Any, str]:
-        """Executes an authenticated HTTP request to the Supabase PostgREST API."""
+                      headers_extra: Optional[Dict[str, str]] = None,
+                      user_token: Optional[str] = None) -> Tuple[bool, Any, str]:
+        """Executes an authenticated HTTP request to the Supabase PostgREST API with user JWT or anon key."""
         cfg = cls.get_config()
         if not cfg["url"] or not cfg["key"]:
             return False, None, "Cloud score synchronization is temporarily unavailable (database not configured)."
@@ -71,9 +72,10 @@ class DatabaseService:
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
 
+        auth_header = f"Bearer {user_token}" if user_token else f"Bearer {cfg['key']}"
         headers = {
             "apikey": cfg["key"],
-            "Authorization": f"Bearer {cfg['key']}",
+            "Authorization": auth_header,
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
@@ -85,7 +87,6 @@ class DatabaseService:
         try:
             req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
             with urllib.request.urlopen(req, timeout=10) as response:
-                status = response.status
                 resp_text = response.read().decode("utf-8")
                 result_data = json.loads(resp_text) if resp_text else []
                 return True, result_data, "Success"
@@ -103,7 +104,8 @@ class DatabaseService:
                             provider_user_id: str,
                             email: str,
                             display_name: str,
-                            avatar_url: Optional[str] = None) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+                            avatar_url: Optional[str] = None,
+                            user_token: Optional[str] = None) -> Tuple[bool, Optional[Dict[str, Any]], str]:
         """Upserts a player profile in Supabase by provider_user_id and returns the player record with UUID."""
         if not cls.is_configured():
             return False, None, "Cloud score synchronization is temporarily unavailable."
@@ -112,7 +114,8 @@ class DatabaseService:
         success, records, msg = cls._make_request(
             "players",
             method="GET",
-            params={"provider_user_id": f"eq.{provider_user_id}", "select": "*"}
+            params={"provider_user_id": f"eq.{provider_user_id}", "select": "*"},
+            user_token=user_token
         )
         if success and records and isinstance(records, list) and len(records) > 0:
             player = records[0]
@@ -124,7 +127,8 @@ class DatabaseService:
                     "display_name": display_name,
                     "avatar_url": avatar_url,
                     "last_login": "now()"
-                }
+                },
+                user_token=user_token
             )
             return True, player, "Profile synchronized."
 
@@ -139,7 +143,8 @@ class DatabaseService:
             "players",
             method="POST",
             data=insert_data,
-            headers_extra={"Prefer": "return=representation"}
+            headers_extra={"Prefer": "return=representation"},
+            user_token=user_token
         )
         if success and inserted and isinstance(inserted, list) and len(inserted) > 0:
             return True, inserted[0], "Profile created."
@@ -159,10 +164,11 @@ class DatabaseService:
                           hints: int = 0,
                           seed: int = 0,
                           solved: bool = True,
-                          metrics_breakdown: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+                          metrics_breakdown: Optional[Dict[str, Any]] = None,
+                          user_token: Optional[str] = None) -> Tuple[bool, str]:
         """
         Durable score submission with database-level UNIQUE(game_session_id) deduplication.
-        Also updates aggregated statistics for the player and game.
+        Also updates aggregated statistics for the player and game under RLS.
         """
         if not player_id or not game_session_id:
             return False, "Invalid player or session ID."
@@ -190,7 +196,8 @@ class DatabaseService:
             "game_scores",
             method="POST",
             data=score_record,
-            headers_extra={"Prefer": "return=minimal"}
+            headers_extra={"Prefer": "return=minimal"},
+            user_token=user_token
         )
         if "already recorded" in msg:
             return True, "Score already recorded."
@@ -198,7 +205,7 @@ class DatabaseService:
             return False, msg
 
         # 2. Update aggregated game_statistics
-        cls._update_game_statistics(player_id, game, score, time_seconds, moves, solved)
+        cls._update_game_statistics(player_id, game, score, time_seconds, moves, solved, user_token=user_token)
         return True, "Score successfully synchronized to cloud."
 
     @classmethod
@@ -208,13 +215,15 @@ class DatabaseService:
                                 score: int,
                                 time_seconds: int,
                                 moves: int,
-                                solved: bool):
-        """Updates or creates aggregated stats for a player and game."""
+                                solved: bool,
+                                user_token: Optional[str] = None):
+        """Updates or creates aggregated stats for a player and game under RLS."""
         game_norm = str(game).lower()
         success, existing, _ = cls._make_request(
             "game_statistics",
             method="GET",
-            params={"player_id": f"eq.{player_id}", "game": f"eq.{game_norm}", "select": "*"}
+            params={"player_id": f"eq.{player_id}", "game": f"eq.{game_norm}", "select": "*"},
+            user_token=user_token
         )
 
         if success and existing and isinstance(existing, list) and len(existing) > 0:
@@ -237,7 +246,8 @@ class DatabaseService:
                     "best_moves": best_mv if best_mv != 999999 else 0,
                     "total_score": tot_sc,
                     "updated_at": "now()"
-                }
+                },
+                user_token=user_token
             )
         else:
             cls._make_request(
@@ -252,11 +262,12 @@ class DatabaseService:
                     "best_time": time_seconds,
                     "best_moves": moves,
                     "total_score": score
-                }
+                },
+                user_token=user_token
             )
 
     @classmethod
-    def get_player_statistics(cls, player_id: str) -> List[Dict[str, Any]]:
+    def get_player_statistics(cls, player_id: str, user_token: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves lifetime game statistics for the authenticated player."""
         if not cls.is_configured() or not player_id:
             return []
@@ -264,14 +275,15 @@ class DatabaseService:
         success, stats, _ = cls._make_request(
             "game_statistics",
             method="GET",
-            params={"player_id": f"eq.{player_id}", "select": "*"}
+            params={"player_id": f"eq.{player_id}", "select": "*"},
+            user_token=user_token
         )
         return stats if success and isinstance(stats, list) else []
 
     @classmethod
-    def get_player_high_scores(cls, player_id: str) -> Dict[str, Any]:
+    def get_player_high_scores(cls, player_id: str, user_token: Optional[str] = None) -> Dict[str, Any]:
         """Returns aggregated high scores across all games for the player."""
-        stats = cls.get_player_statistics(player_id)
+        stats = cls.get_player_statistics(player_id, user_token=user_token)
         result = {
             "total_score": sum(s.get("total_score", 0) for s in stats),
             "games_played": sum(s.get("games_played", 0) for s in stats),
@@ -290,7 +302,7 @@ class DatabaseService:
         return result
 
     @classmethod
-    def get_player_recent_scores(cls, player_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_player_recent_scores(cls, player_id: str, limit: int = 10, user_token: Optional[str] = None) -> List[Dict[str, Any]]:
         """Returns the most recent game score history for the authenticated player."""
         if not cls.is_configured() or not player_id:
             return []
@@ -298,6 +310,7 @@ class DatabaseService:
         success, scores, _ = cls._make_request(
             "game_scores",
             method="GET",
-            params={"player_id": f"eq.{player_id}", "order": "created_at.desc", "limit": str(limit), "select": "*"}
+            params={"player_id": f"eq.{player_id}", "order": "created_at.desc", "limit": str(limit), "select": "*"},
+            user_token=user_token
         )
         return scores if success and isinstance(scores, list) else []

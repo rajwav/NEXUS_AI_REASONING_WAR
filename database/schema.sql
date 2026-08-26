@@ -1,7 +1,7 @@
 -- ====================================================================
 -- NEXUS AI REASONING WAR (V2) — DATABASE SCHEMA & MIGRATION SCRIPT
 -- Target Database: Supabase PostgreSQL (PostgREST API)
--- Fully Idempotent: Safe to execute on fresh or existing databases
+-- Security: Row Level Security (RLS) with Strict User Ownership
 -- ====================================================================
 
 -- 1. PLAYERS TABLE
@@ -62,12 +62,14 @@ CREATE TABLE IF NOT EXISTS public.game_statistics (
 CREATE INDEX IF NOT EXISTS idx_game_stats_player ON public.game_statistics(player_id);
 
 
--- 4. PERMISSIONS & ROLE GRANTS
--- Allow PostgREST anon and authenticated roles to access tables under RLS
+-- 4. ROLE GRANTS & ACCESS CONTROL
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT ALL ON TABLE public.players TO anon, authenticated;
-GRANT ALL ON TABLE public.game_scores TO anon, authenticated;
-GRANT ALL ON TABLE public.game_statistics TO anon, authenticated;
+GRANT SELECT ON TABLE public.players TO anon;
+GRANT ALL ON TABLE public.players TO authenticated;
+GRANT ALL ON TABLE public.game_scores TO authenticated;
+GRANT ALL ON TABLE public.game_statistics TO authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.game_scores FROM anon;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.game_statistics FROM anon;
 
 
 -- 5. ROW LEVEL SECURITY (RLS) POLICIES
@@ -75,33 +77,45 @@ ALTER TABLE public.players ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.game_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.game_statistics ENABLE ROW LEVEL SECURITY;
 
--- Players Policies
+-- Players Policies (Authenticated User Ownership)
 DROP POLICY IF EXISTS "Allow individual player read" ON public.players;
 CREATE POLICY "Allow individual player read" ON public.players
-    FOR SELECT USING (true);
+    FOR SELECT TO authenticated, anon USING (true);
 
 DROP POLICY IF EXISTS "Allow individual player insert" ON public.players;
 CREATE POLICY "Allow individual player insert" ON public.players
-    FOR INSERT WITH CHECK (true);
+    FOR INSERT TO authenticated WITH CHECK (
+        auth.uid() = id OR auth.uid()::text = provider_user_id OR auth.role() = 'anon'
+    );
 
 DROP POLICY IF EXISTS "Allow individual player update" ON public.players;
 CREATE POLICY "Allow individual player update" ON public.players
-    FOR UPDATE USING (true);
+    FOR UPDATE TO authenticated USING (
+        auth.uid() = id OR auth.uid()::text = provider_user_id
+    );
 
--- Scores Policies
+-- Game Scores Policies (Authenticated Ownership Enforced)
 DROP POLICY IF EXISTS "Allow player score select" ON public.game_scores;
 CREATE POLICY "Allow player score select" ON public.game_scores
-    FOR SELECT USING (true);
+    FOR SELECT TO authenticated USING (
+        auth.uid() = player_id OR auth.uid()::text = (SELECT provider_user_id FROM public.players WHERE id = game_scores.player_id)
+    );
 
 DROP POLICY IF EXISTS "Allow player score insert" ON public.game_scores;
 CREATE POLICY "Allow player score insert" ON public.game_scores
-    FOR INSERT WITH CHECK (true);
+    FOR INSERT TO authenticated WITH CHECK (
+        auth.uid() = player_id OR auth.uid()::text = (SELECT provider_user_id FROM public.players WHERE id = game_scores.player_id)
+    );
 
--- Statistics Policies
+-- Game Statistics Policies (Authenticated Ownership Enforced)
 DROP POLICY IF EXISTS "Allow player stats select" ON public.game_statistics;
 CREATE POLICY "Allow player stats select" ON public.game_statistics
-    FOR SELECT USING (true);
+    FOR SELECT TO authenticated USING (
+        auth.uid() = player_id OR auth.uid()::text = (SELECT provider_user_id FROM public.players WHERE id = game_statistics.player_id)
+    );
 
-DROP POLICY IF EXISTS "Allow player stats upsert" ON public.game_statistics;
-CREATE POLICY "Allow player stats upsert" ON public.game_statistics
-    FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow player stats update" ON public.game_statistics;
+CREATE POLICY "Allow player stats update" ON public.game_statistics
+    FOR ALL TO authenticated USING (
+        auth.uid() = player_id OR auth.uid()::text = (SELECT provider_user_id FROM public.players WHERE id = game_statistics.player_id)
+    );

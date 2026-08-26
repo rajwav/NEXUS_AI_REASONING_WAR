@@ -298,7 +298,7 @@ def render_player_profile_sidebar():
         """, unsafe_allow_html=True)
         
         with st.sidebar.expander("🏆 MY STATS & HIGH SCORES", expanded=False):
-            high_scores = DatabaseService.get_player_high_scores(user.id or user.provider_user_id)
+            high_scores = DatabaseService.get_player_high_scores(user.id or user.provider_user_id, user_token=user.access_token)
             tot_sc = high_scores.get("total_score", 0)
             g_won = high_scores.get("games_won", 0)
             g_play = high_scores.get("games_played", 0)
@@ -361,7 +361,8 @@ def render_game_score_card(game_name: str, difficulty: str, solved: bool, **kwar
                 hints=kwargs.get("hints", 0),
                 seed=st.session_state.seed,
                 solved=solved,
-                metrics_breakdown=score_data
+                metrics_breakdown=score_data,
+                user_token=user.access_token
             )
             if success:
                 cloud_status_text = "☁️ Synced to Supabase Cloud"

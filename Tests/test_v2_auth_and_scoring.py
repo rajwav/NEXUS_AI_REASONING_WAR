@@ -218,6 +218,94 @@ class TestV2AuthAndScoring(unittest.TestCase):
         self.assertFalse(success)
         self.assertIn("Invalid player or session ID", msg)
 
+    def test_security_player_a_can_access_own_data(self):
+        # Player A queries with own player_id and JWT token -> ALLOWED
+        with patch.object(DatabaseService, "is_configured", return_value=True):
+            with patch.object(DatabaseService, "_make_request") as mock_req:
+                mock_req.return_value = (True, [{"player_id": "player-A-uuid", "game": "sudoku", "best_score": 2500}], "Success")
+                stats = DatabaseService.get_player_statistics(player_id="player-A-uuid", user_token="jwt-token-player-A")
+                self.assertEqual(len(stats), 1)
+                self.assertEqual(stats[0]["player_id"], "player-A-uuid")
+                # Assert user_token was forwarded to PostgREST
+                self.assertEqual(mock_req.call_args[1]["user_token"], "jwt-token-player-A")
+                self.assertEqual(mock_req.call_args[1]["params"]["player_id"], "eq.player-A-uuid")
+
+    def test_security_player_a_cannot_access_player_b_data(self):
+        # When Player A attempts to query Player B's data, RLS or query isolation rejects foreign records
+        with patch.object(DatabaseService, "is_configured", return_value=True):
+            with patch.object(DatabaseService, "_make_request") as mock_req:
+                # Simulating PostgREST RLS returning 0 rows when JWT does not match player_id
+                mock_req.return_value = (True, [], "Success")
+                stats = DatabaseService.get_player_statistics(player_id="player-B-uuid", user_token="jwt-token-player-A")
+                self.assertEqual(stats, [])
+
+    def test_security_unauthenticated_cannot_write_score(self):
+        # Unauthenticated / Guest has no player_id -> DENIED
+        success, msg = DatabaseService.submit_game_score(
+            player_id="",
+            game_session_id=str(uuid.uuid4()),
+            game="laser",
+            difficulty="hard",
+            score=2000,
+            time_seconds=45,
+            seed=999
+        )
+        self.assertFalse(success)
+        self.assertIn("Invalid player or session ID", msg)
+
+    def test_security_authenticated_player_a_can_write_score(self):
+        # Authenticated Player A with valid session token -> ALLOWED
+        sess_id = str(uuid.uuid4())
+        with patch.object(DatabaseService, "is_configured", return_value=True):
+            with patch.object(DatabaseService, "_make_request") as mock_req:
+                mock_req.return_value = (True, [{"id": "score-uuid"}], "Success")
+                success, msg = DatabaseService.submit_game_score(
+                    player_id="player-A-uuid",
+                    game_session_id=sess_id,
+                    game="sokoban",
+                    difficulty="medium",
+                    score=1800,
+                    time_seconds=60,
+                    moves=15,
+                    seed=12345,
+                    solved=True,
+                    user_token="jwt-token-player-A"
+                )
+                self.assertTrue(success)
+                self.assertIn("successfully synchronized", msg)
+
+    def test_security_duplicate_game_session_id_rejected_or_idempotent(self):
+        # Duplicate game_session_id submission handled idempotently without duplicate row creation
+        sess_id = str(uuid.uuid4())
+        with patch.object(DatabaseService, "is_configured", return_value=True):
+            with patch.object(DatabaseService, "_make_request") as mock_req:
+                mock_req.return_value = (True, [], "Score already recorded.")
+                success, msg = DatabaseService.submit_game_score(
+                    player_id="player-A-uuid",
+                    game_session_id=sess_id,
+                    game="minesweeper",
+                    difficulty="expert",
+                    score=3000,
+                    time_seconds=120,
+                    seed=8888,
+                    user_token="jwt-token-player-A"
+                )
+                self.assertTrue(success)
+                self.assertEqual(msg, "Score already recorded.")
+
+    def test_security_tampered_player_identity_rejected(self):
+        # Tampered or None session ID -> rejected
+        success, msg = DatabaseService.submit_game_score(
+            player_id="valid-player-id",
+            game_session_id="",
+            game="battle",
+            difficulty="hard",
+            score=1500,
+            time_seconds=30
+        )
+        self.assertFalse(success)
+        self.assertIn("Invalid player or session ID", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

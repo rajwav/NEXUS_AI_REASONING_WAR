@@ -20,6 +20,7 @@ class PlayerProfile:
     email: str
     display_name: str
     avatar_url: Optional[str] = None
+    access_token: Optional[str] = None
     is_authenticated: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -29,6 +30,7 @@ class PlayerProfile:
             "email": self.email,
             "display_name": self.display_name,
             "avatar_url": self.avatar_url,
+            "access_token": self.access_token,
             "is_authenticated": self.is_authenticated
         }
 
@@ -112,7 +114,7 @@ class AuthService:
             return False, None, "Google OAuth is not configured on this deployment."
 
         try:
-            # 1. Exchange code for access token
+            # 1. Exchange code for access token & id_token
             token_data = urllib.parse.urlencode({
                 "code": code,
                 "client_id": cfg["client_id"],
@@ -129,6 +131,7 @@ class AuthService:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 token_resp = json.loads(resp.read().decode("utf-8"))
                 access_token = token_resp.get("access_token")
+                id_token = token_resp.get("id_token")
 
             if not access_token:
                 return False, None, "Failed to retrieve access token from Google."
@@ -155,6 +158,7 @@ class AuthService:
                 email=str(email),
                 display_name=str(display_name),
                 avatar_url=avatar_url,
+                access_token=id_token or access_token,
                 is_authenticated=True
             )
             return True, profile, "Authentication successful."
