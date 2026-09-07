@@ -771,15 +771,14 @@ class SokobanEngine:
 
     def solve_astar(self, max_expansions: int = 5000) -> Optional[List[Tuple[int, int]]]:
         """A* / BFS solver to verify level solvability."""
-        start_state = (self.initial_player, tuple(sorted(self.initial_boxes)))
+        start_state = (self.initial_player, frozenset(self.initial_boxes))
         queue = collections.deque([(start_state, [])])
         visited = {start_state}
         expansions = 0
 
         while queue and expansions < max_expansions:
             expansions += 1
-            (p_pos, b_tuple), path = queue.popleft()
-            b_set = set(b_tuple)
+            (p_pos, b_set), path = queue.popleft()
 
             if b_set == self.targets:
                 return path
@@ -797,12 +796,12 @@ class SokobanEngine:
                     new_b_set = set(b_set)
                     new_b_set.remove((nx, ny))
                     new_b_set.add((bx, by))
-                    nxt_state = ((nx, ny), tuple(sorted(new_b_set)))
+                    nxt_state = ((nx, ny), frozenset(new_b_set))
                     if nxt_state not in visited:
                         visited.add(nxt_state)
                         queue.append((nxt_state, path + [(dx, dy)]))
                 else:
-                    nxt_state = ((nx, ny), b_tuple)
+                    nxt_state = ((nx, ny), b_set)
                     if nxt_state not in visited:
                         visited.add(nxt_state)
                         queue.append((nxt_state, path + [(dx, dy)]))

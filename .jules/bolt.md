@@ -1,0 +1,3 @@
+## 2024-05-18 - Replacing tuple(sorted()) with frozenset for unordered state tracking
+**Learning:** Using `tuple(sorted(set))` to represent unordered collections of coordinates (like boxes in Sokoban) within visited sets for search algorithms (A*) is surprisingly slow due to the repeated sorting overhead at every node expansion.
+**Action:** Always prefer `frozenset` when tracking unordered collections in hash-based structures (like `set` or `dict`) during search/pathfinding algorithms in Python, as it natively handles hashing without needing sorting and significantly reduces overhead in tight loops.
