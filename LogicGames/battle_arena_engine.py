@@ -133,28 +133,29 @@ class BattleArenaEngine:
         return score
 
     def check_win(self, piece: int) -> bool:
+        # Optimization: Avoid generator overhead in check_win by unrolling the 4-in-a-row checks
         # Horizontal
         for r in range(self.rows):
             for c in range(self.cols - 3):
-                if all(self.board[r][c + i] == piece for i in range(4)):
+                if self.board[r][c] == piece and self.board[r][c + 1] == piece and self.board[r][c + 2] == piece and self.board[r][c + 3] == piece:
                     self.winning_line = [(r, c + i) for i in range(4)]
                     return True
         # Vertical
         for r in range(self.rows - 3):
             for c in range(self.cols):
-                if all(self.board[r + i][c] == piece for i in range(4)):
+                if self.board[r][c] == piece and self.board[r + 1][c] == piece and self.board[r + 2][c] == piece and self.board[r + 3][c] == piece:
                     self.winning_line = [(r + i, c) for i in range(4)]
                     return True
         # Positive Diagonal
         for r in range(self.rows - 3):
             for c in range(self.cols - 3):
-                if all(self.board[r + i][c + i] == piece for i in range(4)):
+                if self.board[r][c] == piece and self.board[r + 1][c + 1] == piece and self.board[r + 2][c + 2] == piece and self.board[r + 3][c + 3] == piece:
                     self.winning_line = [(r + i, c + i) for i in range(4)]
                     return True
         # Negative Diagonal
         for r in range(3, self.rows):
             for c in range(self.cols - 3):
-                if all(self.board[r - i][c + i] == piece for i in range(4)):
+                if self.board[r][c] == piece and self.board[r - 1][c + 1] == piece and self.board[r - 2][c + 2] == piece and self.board[r - 3][c + 3] == piece:
                     self.winning_line = [(r - i, c + i) for i in range(4)]
                     return True
         return False

@@ -26,25 +26,26 @@ class BattleArenaAISolver:
         return -1
 
     def winning_move(self, piece: int, current_board: List[List[int]]) -> bool:
+        # Optimization: Avoid generator overhead in Minimax hot path by unrolling the 4-in-a-row checks
         # Horizontal
         for r in range(self.rows):
             for c in range(self.cols - 3):
-                if all(current_board[r][c + i] == piece for i in range(4)):
+                if current_board[r][c] == piece and current_board[r][c + 1] == piece and current_board[r][c + 2] == piece and current_board[r][c + 3] == piece:
                     return True
         # Vertical
         for r in range(self.rows - 3):
             for c in range(self.cols):
-                if all(current_board[r + i][c] == piece for i in range(4)):
+                if current_board[r][c] == piece and current_board[r + 1][c] == piece and current_board[r + 2][c] == piece and current_board[r + 3][c] == piece:
                     return True
         # Diagonal /
         for r in range(3, self.rows):
             for c in range(self.cols - 3):
-                if all(current_board[r - i][c + i] == piece for i in range(4)):
+                if current_board[r][c] == piece and current_board[r - 1][c + 1] == piece and current_board[r - 2][c + 2] == piece and current_board[r - 3][c + 3] == piece:
                     return True
         # Diagonal \
         for r in range(self.rows - 3):
             for c in range(self.cols - 3):
-                if all(current_board[r + i][c + i] == piece for i in range(4)):
+                if current_board[r][c] == piece and current_board[r + 1][c + 1] == piece and current_board[r + 2][c + 2] == piece and current_board[r + 3][c + 3] == piece:
                     return True
         return False
 

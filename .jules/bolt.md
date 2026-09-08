@@ -1,0 +1,3 @@
+## 2024-05-24 - Python Generator Overhead in Minimax Hot Paths
+**Learning:** In highly recursive hot paths like Minimax tree evaluation, python generator expressions (e.g., `all(board[r][c+i] == piece for i in range(4))`) create significant overhead compared to direct evaluation.
+**Action:** When evaluating win conditions frequently, particularly on small fixed grid sizes (e.g., 4-in-a-row in a 7x6 board), unroll loops and boolean checks manually to avoid generator creation costs, providing a substantial speed boost.
