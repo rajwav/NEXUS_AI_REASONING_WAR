@@ -18,6 +18,39 @@ from LogicGames.battle_arena_engine import BattleArenaEngine
 
 class TestLogicGamesSuite(unittest.TestCase):
 
+    def test_sudoku_is_valid_move_on_populated_cell(self):
+        # Bolt Regression Test for _is_valid_on_grid performance fix
+        engine = SudokuEngine(difficulty="easy")
+
+        # Manually clear a test board
+        for r in range(9):
+            for c in range(9):
+                engine.current_board[r][c] = 0
+
+        # Place initial value
+        engine.current_board[0][0] = 5
+
+        # Test 1: Same value already in target cell
+        # Should return True since we ignore the target cell when validating
+        self.assertTrue(engine.is_valid_move(0, 0, 5), "Same value in target cell should be valid.")
+
+        # Test 2: Different value in the target cell
+        # Checking if we can place a 6 there should be valid (ignoring the 5)
+        self.assertTrue(engine.is_valid_move(0, 0, 6), "Different value in target cell should be valid.")
+
+        # Test 3: Conflicting value elsewhere in the row
+        engine.current_board[0][1] = 7
+        self.assertFalse(engine.is_valid_move(0, 0, 7), "Conflict in row should be invalid.")
+
+        # Test 4: Conflicting value elsewhere in the col
+        engine.current_board[1][0] = 8
+        self.assertFalse(engine.is_valid_move(0, 0, 8), "Conflict in col should be invalid.")
+
+        # Test 5: Conflicting value elsewhere in the box
+        engine.current_board[1][1] = 9
+        self.assertFalse(engine.is_valid_move(0, 0, 9), "Conflict in box should be invalid.")
+
+
     def test_sudoku_procedural_generator_and_seed(self):
         seed1 = 482910
         engine1 = SudokuEngine(seed=seed1, difficulty="easy")

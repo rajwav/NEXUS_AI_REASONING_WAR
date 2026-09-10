@@ -199,13 +199,13 @@ class SudokuEngine:
         # Bolt Performance Improvement: Loop consolidation.
         # Combined row and column checks into a single loop.
         for i in range(9):
-            if grid[row][i] == num: return False
-            if grid[i][col] == num: return False
+            if i != col and grid[row][i] == num: return False
+            if i != row and grid[i][col] == num: return False
 
         br, bc = (row // 3) * 3, (col // 3) * 3
         for r in range(br, br + 3):
             for c in range(bc, bc + 3):
-                if grid[r][c] == num:
+                if (r != row or c != col) and grid[r][c] == num:
                     return False
         return True
 
