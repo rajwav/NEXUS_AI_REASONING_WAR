@@ -1,0 +1,3 @@
+## 2024-05-24 - Bypass UI generators in pathfinding for instant solve
+**Learning:** In this codebase, pathfinding algorithms (like BFS and A*) rely on UI-focused step generators (e.g., `find_path_stepper`) for instant pathfinding (`find_path`), which causes severe performance overhead due to state dictionary instantiation and yielding.
+**Action:** Always bypass these UI step generators for instant logic evaluation and implement direct search logic instead. This approach yielded massive ~70x speedups.
