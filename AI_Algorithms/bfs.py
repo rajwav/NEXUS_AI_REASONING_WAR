@@ -11,16 +11,51 @@ class BreadthFirstSearch:
     """Breadth-First Search (BFS) pathfinder with step-by-step generator."""
     def find_path(self, grid: List[List[Any]], start: Tuple[int, int], goal: Tuple[int, int],
                   walkable_fn: Optional[Any] = None) -> Tuple[Optional[List[Tuple[int, int]]], Dict[str, Any]]:
-        stats = {"expanded_nodes": 0, "path_cost": 0.0, "visited_states": []}
-        steps = list(self.find_path_stepper(grid, start, goal, walkable_fn))
-        if not steps:
-            return None, stats
-        final_step = steps[-1]
-        stats["expanded_nodes"] = final_step["expanded_count"]
-        stats["visited_states"] = [s["current_pos"] for s in steps if "current_pos" in s]
-        if final_step["status"] == "GOAL_REACHED":
-            stats["path_cost"] = len(final_step["path"]) - 1
-            return final_step["path"], stats
+        stats = {"expanded_nodes": 0, "path_cost": 0.0, "visited_states": [start]}
+
+        height = len(grid)
+        width = len(grid[0]) if height > 0 else 0
+
+        def is_walkable(pos: Tuple[int, int]) -> bool:
+            x, y = pos
+            if not (0 <= x < width and 0 <= y < height):
+                return False
+            if walkable_fn:
+                return walkable_fn(pos)
+            return True
+
+        queue = deque([start])
+        came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        visited: Set[Tuple[int, int]] = {start}
+        expanded_count = 0
+
+        while queue:
+            current = queue.popleft()
+            expanded_count += 1
+
+            if current != start:
+                stats["visited_states"].append(current)
+
+            if current == goal:
+                path = []
+                curr: Optional[Tuple[int, int]] = current
+                while curr:
+                    path.append(curr)
+                    curr = came_from.get(curr)
+                path.reverse()
+
+                stats["expanded_nodes"] = expanded_count
+                stats["path_cost"] = float(len(path) - 1)
+                return path, stats
+
+            for dx, dy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                nxt = (current[0] + dx, current[1] + dy)
+                if is_walkable(nxt) and nxt not in visited:
+                    visited.add(nxt)
+                    came_from[nxt] = current
+                    queue.append(nxt)
+
+        stats["expanded_nodes"] = expanded_count
         return None, stats
 
     def find_path_stepper(self, grid: List[List[Any]], start: Tuple[int, int], goal: Tuple[int, int],
