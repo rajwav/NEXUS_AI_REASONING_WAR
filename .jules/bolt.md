@@ -1,0 +1,3 @@
+## 2024-05-24 - AI Pathfinding Overhead Bottleneck
+**Learning:** In this codebase, the core pathfinding algorithms (A*, BFS) had massive performance overhead due to reusing their UI-focused visualization step generators (`find_path_stepper`) for the core logic (`find_path`). The constant yielding and instantiation of large state dictionaries at every search step throttled execution speed exponentially (A* search went from ~4.2s to ~0.12s on a 50x50 grid test when isolated).
+**Action:** Always implement direct computational logic separately from telemetry/visualization generators. Never use a generator yielding state-dictionaries to perform raw computations where speed is critical.
