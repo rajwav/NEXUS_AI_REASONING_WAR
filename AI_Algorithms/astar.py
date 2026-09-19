@@ -50,17 +50,63 @@ class AStarSearch:
     def find_path(self, grid: List[List[Any]], start: Tuple[int, int], goal: Tuple[int, int],
                   walkable_fn: Optional[Any] = None) -> Tuple[Optional[List[Tuple[int, int]]], Dict[str, Any]]:
         """Instant solve returning path and search statistics."""
-        stats = {"expanded_nodes": 0, "max_open_size": 0, "path_cost": 0.0, "visited_states": []}
-        steps = list(self.find_path_stepper(grid, start, goal, walkable_fn))
-        if not steps:
-            return None, stats
-        final_step = steps[-1]
-        stats["expanded_nodes"] = final_step["expanded_count"]
-        stats["visited_states"] = [s["current_node"]["position"] for s in steps if "current_node" in s]
-        if final_step["status"] == "GOAL_REACHED":
-            stats["path_cost"] = len(final_step["path"]) - 1
-            return final_step["path"], stats
-        return None, stats
+        # ⚡ Bolt: Direct A* implementation avoiding UI stepper generator/dict overhead
+        height = len(grid)
+        width = len(grid[0]) if height > 0 else 0
+
+        def is_walkable(pos: Tuple[int, int]) -> bool:
+            if not (0 <= pos[0] < width and 0 <= pos[1] < height): return False
+            if walkable_fn: return walkable_fn(pos)
+            return True
+
+        start_node = Node(start, None, 0.0, self.heuristic(start, goal))
+        open_heap = [(start_node.f_cost, 0, start_node)]
+        open_dict = {start: start_node}
+        closed_set = set()
+        visited_states = []
+        node_counter, expanded_count = 0, 0
+
+        while open_heap:
+            _, _, current = heapq.heappop(open_heap)
+            pos = current.position
+            if pos in open_dict: del open_dict[pos]
+            if pos in closed_set: continue
+
+            closed_set.add(pos)
+            visited_states.append(pos)
+            expanded_count += 1
+
+            if pos == goal:
+                path = []
+                curr = current
+                while curr:
+                    path.append(curr.position)
+                    curr = curr.parent
+                path.reverse()
+                return path, {"expanded_nodes": expanded_count, "max_open_size": 0, "path_cost": float(len(path) - 1), "visited_states": visited_states}
+
+            for dx, dy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                neighbor_pos = (pos[0] + dx, pos[1] + dy)
+                if not is_walkable(neighbor_pos) or neighbor_pos in closed_set: continue
+
+                tentative_g = current.g_cost + 1.0
+                neighbor_h = self.heuristic(neighbor_pos, goal)
+
+                existing = open_dict.get(neighbor_pos)
+                if existing:
+                    if tentative_g < existing.g_cost:
+                        existing.g_cost = tentative_g
+                        existing.f_cost = tentative_g + neighbor_h
+                        existing.parent = current
+                        node_counter += 1
+                        heapq.heappush(open_heap, (existing.f_cost, node_counter, existing))
+                else:
+                    new_node = Node(neighbor_pos, current, tentative_g, neighbor_h)
+                    open_dict[neighbor_pos] = new_node
+                    node_counter += 1
+                    heapq.heappush(open_heap, (new_node.f_cost, node_counter, new_node))
+
+        return None, {"expanded_nodes": expanded_count, "max_open_size": 0, "path_cost": 0.0, "visited_states": visited_states}
 
     def find_path_stepper(self, grid: List[List[Any]], start: Tuple[int, int], goal: Tuple[int, int],
                           walkable_fn: Optional[Any] = None) -> Generator[Dict[str, Any], None, None]:
