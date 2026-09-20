@@ -1,0 +1,3 @@
+## 2024-05-24 - A* and BFS find_path generator overhead
+**Learning:** Using `find_path_stepper` as the core computation for `find_path` was creating massive performance overhead because it instantiates full state dictionary snapshots (including paths, sets, and lists) for every expansion step to support visual animations. This is a codebase-specific anti-pattern.
+**Action:** When working in this codebase, ensure core algorithm methods (like `find_path`) implement direct search logic and bypass UI-focused step generators (like `find_path_stepper`). The stepper methods should only be used directly by UI/animation layers when requested.
