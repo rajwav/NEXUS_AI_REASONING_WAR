@@ -1,0 +1,3 @@
+## 2024-05-24 - A* Generator Object Allocation Overhead
+**Learning:** In this codebase, the `find_path` core search algorithms were consuming `find_path_stepper` UI generators directly. Because the step generators yield dictionary objects full of deeply-copied state telemetry on every single node expansion, using them for the core non-visual search is catastrophically slow, completely masking the fast theoretical bounds of A*.
+**Action:** When a function requires purely algorithmic throughput, separate it from visual step-yield generators. Duplicate the algorithmic loop into a direct compute version and let the `stepper` be exclusively used when actual visual telemetry is needed, effectively preventing object instantiation bloat.
