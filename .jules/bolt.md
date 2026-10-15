@@ -1,0 +1,3 @@
+## 2024-10-24 - O(N^2) State Scan Avoidance in Deep Recursion
+**Learning:** During deep recursive search algorithms like backtracking on a Sudoku grid (where N=81 cells), performing full board scans to find the "next empty cell" on every step introduces severe performance overhead. I found that doing an O(N) scan inside `backtrack()` caused millions of primitive calls.
+**Action:** When implementing deep recursive search (like backtracking or DFS) on static-sized matrices, precompute a list of mutable/empty state elements once before recursion begins. Iterate over this list by index instead of continuously scanning the board.
