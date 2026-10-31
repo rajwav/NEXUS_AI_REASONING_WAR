@@ -15,9 +15,19 @@ class MinesweeperAISolver:
         self.width = width
         self.height = height
         self.mines = set(mines)
+        if not self.mines:
+            import random
+            rng = random.Random(42)
+            cx, cy = width // 2, height // 2
+            forbidden = {(cx + dx, cy + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+            candidates = [(x, y) for x in range(width) for y in range(height) if (x, y) not in forbidden]
+            rng.shuffle(candidates)
+            num = 10 if width <= 8 else (25 if width <= 12 else 45)
+            self.mines = set(candidates[:num])
+
         self.revealed = set(revealed) if revealed is not None else set()
         self.flags = set(flags) if flags is not None else set()
-        self.total_safe = (width * height) - len(mines)
+        self.total_safe = (width * height) - len(self.mines)
         self.states_evaluated = 0
         self.recorder = ExplanationRecorder()
 

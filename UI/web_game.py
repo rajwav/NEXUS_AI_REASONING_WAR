@@ -2597,6 +2597,8 @@ def render_laser_game():
 # ====================================================================
 def render_minesweeper_game():
     engine: CircuitMinesweeperEngine = st.session_state.minesweeper_engine
+    if len(engine.mines) == 0:
+        engine.generate_mines(engine.width // 2, engine.height // 2)
     start_time_ms = int(st.session_state.get("game_start_time", time.time()) * 1000)
     
     solver = MinesweeperAISolver(engine.width, engine.height, engine.mines)
@@ -2605,6 +2607,7 @@ def render_minesweeper_game():
     ai_explanation_json = json.dumps(ai_res.get("explanation_data", {}))
     ai_alg = ai_res["algorithm"]
     ai_states = ai_res["states_evaluated"]
+    initial_mines_json = json.dumps([f"{x},{y}" for x, y in sorted(engine.mines)])
 
     html_code = f"""
     <!DOCTYPE html>
@@ -2924,12 +2927,13 @@ def render_minesweeper_game():
             const totalSafe = width * height - numMines;
             const aiSteps = {ai_steps_json};
             const startTimeMs = {start_time_ms};
+            const initialMinesList = {initial_mines_json};
 
-            let mines = new Set();
+            let mines = new Set(initialMinesList);
             let revealed = new Set();
             let marks = new Map(); // key -> 'FLAG' | 'QUESTION'
             let lives = 3;
-            let isFirstClick = true;
+            let isFirstClick = false;
             let currentMode = 'reveal'; // 'reveal' | 'flag' | 'question'
             let timerInterval = null;
             let isGameOver = false;
@@ -3009,22 +3013,30 @@ def render_minesweeper_game():
                 playTone(400, 0.05);
             }}
 
-            function generateMines(safeX, safeY) {{
+            function ensureSafeOpening(safeX, safeY) {{
                 let forbidden = new Set();
                 for (let dx = -1; dx <= 1; dx++) {{
                     for (let dy = -1; dy <= 1; dy++) {{
                         forbidden.add((safeX + dx) + ',' + (safeY + dy));
                     }}
                 }}
-                mines.clear();
-                let placed = 0;
-                while (placed < numMines) {{
-                    const rx = Math.floor(Math.random() * width);
-                    const ry = Math.floor(Math.random() * height);
-                    const k = rx + ',' + ry;
-                    if (!forbidden.has(k) && !mines.has(k)) {{
-                        mines.add(k);
-                        placed++;
+                const toRelocate = [];
+                for (let k of mines) {{
+                    if (forbidden.has(k)) toRelocate.push(k);
+                }}
+                for (let k of toRelocate) {{
+                    mines.delete(k);
+                }}
+                for (let k of toRelocate) {{
+                    let placed = false;
+                    for (let cy = 0; cy < height && !placed; cy++) {{
+                        for (let cx = 0; cx < width && !placed; cx++) {{
+                            const cand = cx + ',' + cy;
+                            if (!forbidden.has(cand) && !mines.has(cand)) {{
+                                mines.add(cand);
+                                placed = true;
+                            }}
+                        }}
                     }}
                 }}
             }}
@@ -3137,7 +3149,7 @@ def render_minesweeper_game():
                 if (marks.has(k)) return;
 
                 if (isFirstClick) {{
-                    generateMines(x, y);
+                    ensureSafeOpening(x, y);
                     isFirstClick = false;
                 }}
 
@@ -3294,8 +3306,12 @@ def render_minesweeper_game():
 
             function resetGrid() {{
                 stopAI();
-                mines.clear(); revealed.clear(); marks.clear();
-                lives = 3; isFirstClick = true; isGameOver = false;
+                mines = new Set(initialMinesList);
+                revealed.clear();
+                marks.clear();
+                lives = 3;
+                isFirstClick = false;
+                isGameOver = false;
                 if (timerInterval) clearInterval(timerInterval);
                 timerInterval = setInterval(updateTimer, 1000);
                 updateTimer();
@@ -3320,8 +3336,12 @@ def render_minesweeper_game():
                 btnWatchAI.style.color = '#FFF';
                 aiReasoningPanel.style.display = 'block';
                 aiStepIdx = 0;
-                mines.clear(); revealed.clear(); marks.clear();
-                lives = 3; isFirstClick = false; isGameOver = false;
+                mines = new Set(initialMinesList);
+                revealed.clear();
+                marks.clear();
+                lives = 3;
+                isFirstClick = false;
+                isGameOver = false;
                 if (timerInterval) clearInterval(timerInterval);
                 timerInterval = setInterval(updateTimer, 1000);
                 updateTimer();
@@ -3345,6 +3365,9 @@ def render_minesweeper_game():
                         playTone(720, 0.08);
                     }} else if (action === 'REVEAL') {{
                         revealed.add(k);
+                        if (getAdjCount(x, y) === 0) {{
+                            floodFill(x, y);
+                        }}
                         playTone(520 + (aiStepIdx * 8), 0.06);
                     }}
 
