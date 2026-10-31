@@ -3107,7 +3107,6 @@ def render_minesweeper_game():
 
             function handleCellAction(x, y, mode) {{
                 if (isGameOver) return;
-                startTimer();
                 const k = x + ',' + y;
 
                 if (mode === 'flag') {{
