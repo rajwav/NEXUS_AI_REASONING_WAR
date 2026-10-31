@@ -33,6 +33,10 @@ class BattleArenaEngine:
         self.winning_line: List[Tuple[int, int]] = []
         self.move_history: List[Tuple[int, int, int]] = []  # (r, c, piece)
 
+    @property
+    def moves_count(self) -> int:
+        return len(self.move_history)
+
     def reset_game(self, seed: Optional[int] = None):
         if seed is not None:
             self.seed = seed

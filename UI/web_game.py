@@ -2205,7 +2205,7 @@ def render_laser_game():
             align-items: center;
             position: relative;
             width: 100%;
-            max-width: 600px;
+            max-width: {max(engine.width * 46 + 60, 680)}px;
         }}
         .game-header {{
             width: 100%;
@@ -2581,6 +2581,7 @@ def render_laser_game():
                 btnWatchAI.style.color = '#00E5FF';
             }}
 
+            const expData = {ai_explanation_json};
             {get_explainability_js()}
 
             draw();
@@ -3657,6 +3658,7 @@ def render_puzzle_arena_tab():
 
             if eng_bt.game_over:
                 outcome_str = "win" if eng_bt.winner == 1 else ("loss" if eng_bt.winner == 2 else "draw")
+                moves_total = len(getattr(eng_bt, "move_history", [])) if hasattr(eng_bt, "move_history") else getattr(eng_bt, "moves_count", 0)
                 if st.session_state.game_session_id not in st.session_state.get("game_completed", {}):
                     st.session_state.game_completed[st.session_state.game_session_id] = {
                         "game_name": "battle",
@@ -3664,7 +3666,7 @@ def render_puzzle_arena_tab():
                         "solved": (eng_bt.winner == 1),
                         "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
                         "outcome": outcome_str,
-                        "moves": eng_bt.moves_count
+                        "moves": moves_total
                     }
                 data = st.session_state.game_completed[st.session_state.game_session_id]
                 if eng_bt.winner == 1:
@@ -3680,7 +3682,7 @@ def render_puzzle_arena_tab():
                     solved=data.get("solved", eng_bt.winner == 1),
                     elapsed_seconds=data.get("time_seconds"),
                     outcome=data.get("outcome", outcome_str),
-                    moves=data.get("moves", eng_bt.moves_count)
+                    moves=data.get("moves", moves_total)
                 )
         st.markdown('</div>', unsafe_allow_html=True)
 
