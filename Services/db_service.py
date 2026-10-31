@@ -22,30 +22,51 @@ class DatabaseService:
 
     @classmethod
     def get_config(cls) -> Dict[str, str]:
-        """Reads Supabase credentials safely from st.secrets or environment."""
+        """
+        Reads Supabase credentials safely from st.secrets or environment.
+        Prioritizes the server-side service_role key to execute authorized writes
+        with strict application-level authentication.
+        """
         url = ""
         key = ""
 
         try:
             if hasattr(st, "secrets"):
+                # 1. Resolve URL
                 if "SUPABASE_URL" in st.secrets:
                     url = str(st.secrets["SUPABASE_URL"])
                 elif "supabase" in st.secrets and "url" in st.secrets["supabase"]:
                     url = str(st.secrets["supabase"]["url"])
 
-                if "SUPABASE_KEY" in st.secrets:
+                # 2. Resolve Key (prioritize server-side service_role key)
+                if "SUPABASE_SERVICE_ROLE_KEY" in st.secrets:
+                    key = str(st.secrets["SUPABASE_SERVICE_ROLE_KEY"])
+                elif "SUPABASE_SERVICE_KEY" in st.secrets:
+                    key = str(st.secrets["SUPABASE_SERVICE_KEY"])
+                elif "SUPABASE_KEY" in st.secrets:
                     key = str(st.secrets["SUPABASE_KEY"])
                 elif "SUPABASE_ANON_KEY" in st.secrets:
                     key = str(st.secrets["SUPABASE_ANON_KEY"])
-                elif "supabase" in st.secrets and "key" in st.secrets["supabase"]:
-                    key = str(st.secrets["supabase"]["key"])
+                elif "supabase" in st.secrets:
+                    sup_sec = st.secrets["supabase"]
+                    if hasattr(sup_sec, "get"):
+                        key = str(
+                            sup_sec.get("service_role_key")
+                            or sup_sec.get("service_key")
+                            or sup_sec.get("key")
+                            or sup_sec.get("anon_key")
+                            or ""
+                        )
         except Exception:
             pass
 
         if not url:
             url = os.environ.get("SUPABASE_URL", "")
         if not key:
-            key = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_ANON_KEY", ""))
+            key = os.environ.get(
+                "SUPABASE_SERVICE_ROLE_KEY",
+                os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_ANON_KEY", "")))
+            )
 
         url = url.rstrip("/")
         return {"url": url, "key": key}
@@ -314,3 +335,38 @@ class DatabaseService:
             user_token=user_token
         )
         return scores if success and isinstance(scores, list) else []
+
+    @classmethod
+    def get_leaderboard(cls,
+                        game: Optional[str] = None,
+                        difficulty: Optional[str] = None,
+                        limit: int = 20,
+                        user_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Retrieves global or game-specific leaderboard ordered deterministically:
+        1. score DESC (highest score first)
+        2. time_seconds ASC (fastest completion time first)
+        Only returns solved/completed entries.
+        """
+        if not cls.is_configured():
+            return []
+
+        params = {
+            "solved": "eq.true",
+            "order": "score.desc,time_seconds.asc",
+            "limit": str(limit),
+            "select": "*,players(display_name,avatar_url)"
+        }
+        if game and str(game).lower() not in ("all", "global"):
+            params["game"] = f"eq.{str(game).lower()}"
+        if difficulty and str(difficulty).lower() not in ("all", "any"):
+            params["difficulty"] = f"eq.{str(difficulty).lower()}"
+
+        success, rows, _ = cls._make_request(
+            "game_scores",
+            method="GET",
+            params=params,
+            user_token=user_token
+        )
+        return rows if success and isinstance(rows, list) else []
+

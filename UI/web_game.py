@@ -48,7 +48,16 @@ from AI_Solvers import (
 )
 
 import uuid
+import importlib.util
 from Services import ScoringEngine, AuthService, PlayerProfile, DatabaseService
+
+
+def render_game_html(html_code: str, height: int = 800):
+    """Renders interactive HTML canvas/game using st.iframe (Streamlit 1.62+) or components.html."""
+    if hasattr(st, "iframe"):
+        st.iframe(html_code, height=height)
+    elif STREAMLIT_AVAILABLE and hasattr(components, "html"):
+        components.html(html_code, height=height)
 
 
 # ====================================================================
@@ -236,6 +245,8 @@ def init_session_state():
         st.session_state.game_session_id = str(uuid.uuid4())
     if "game_start_time" not in st.session_state:
         st.session_state.game_start_time = time.time()
+    if "game_completed" not in st.session_state:
+        st.session_state.game_completed = {}
     if "submitted_session_ids" not in st.session_state:
         st.session_state.submitted_session_ids = set()
     if "guest_scores" not in st.session_state:
@@ -254,31 +265,26 @@ def init_session_state():
         st.session_state.battle_engine = BattleArenaEngine(difficulty=st.session_state.difficulty, seed=st.session_state.seed)
 
 
-def handle_auth_callback():
-    """Handles Google OAuth callback code from URL query params."""
-    try:
-        if hasattr(st, "query_params") and "code" in st.query_params:
-            code = st.query_params["code"]
-            success, profile, msg = AuthService.exchange_code_for_profile(code)
-            if success and profile:
-                db_success, db_player, _ = DatabaseService.sync_player_profile(
-                    profile.provider_user_id, profile.email, profile.display_name, profile.avatar_url
-                )
-                if db_success and db_player:
-                    profile.id = db_player.get("id")
-                AuthService.set_authenticated_user(profile)
-                st.query_params.clear()
-                st.rerun()
-            else:
-                st.sidebar.error(f"Auth Notice: {msg}")
-    except Exception:
-        pass
+def start_new_game_session(game_id: Optional[str] = None):
+    """Generates a fresh UUID session and resets the start timestamp for a new game."""
+    st.session_state.game_session_id = str(uuid.uuid4())
+    st.session_state.game_start_time = time.time()
+    if game_id:
+        st.session_state.current_game_id = game_id
 
 
 def render_player_profile_sidebar():
     """Renders high-contrast Cyberpunk Player Profile & Auth HUD."""
     user = AuthService.get_current_user()
     if user and user.is_authenticated:
+        if not user.id and DatabaseService.is_configured():
+            ok, p_rec, _ = DatabaseService.sync_player_profile(
+                user.provider_user_id, user.email, user.display_name, user.avatar_url, user_token=user.access_token
+            )
+            if ok and p_rec:
+                user.id = p_rec.get("id")
+                AuthService.set_authenticated_user(user)
+
         avatar_html = f'<img src="{user.avatar_url}" style="width:36px; height:36px; border-radius:50%; border:2px solid #00E5FF; margin-right:10px;">' if user.avatar_url else '<div style="width:36px; height:36px; border-radius:50%; border:2px solid #76FF03; display:flex; align-items:center; justify-content:center; background:#0B2247; color:#76FF03; font-weight:800; margin-right:10px;">⚡</div>'
         
         st.sidebar.markdown(f"""
@@ -308,33 +314,35 @@ def render_player_profile_sidebar():
             for g_name, g_info in high_scores.get("games", {}).items():
                 st.markdown(f"**{g_name.upper()}**: Best `{g_info.get('best_score', 0):,}` pts")
 
-        if st.sidebar.button("🚪 Logout", key="btn_logout", use_container_width=True):
-            AuthService.logout()
-            st.rerun()
+        if hasattr(st, "logout"):
+            st.sidebar.button("🚪 Logout", on_click=st.logout, use_container_width=True)
+        else:
+            if st.sidebar.button("🚪 Logout", key="btn_logout", use_container_width=True):
+                AuthService.logout()
+                st.rerun()
     else:
-        auth_url = AuthService.get_google_auth_url()
         st.sidebar.markdown(f"""
         <div style="background:rgba(4,16,36,0.85); border:1px solid rgba(0,229,255,0.3); border-radius:10px; padding:12px; margin-bottom:12px;">
             <div style="font-family:'Orbitron'; font-size:11px; color:#00E5FF; font-weight:700; margin-bottom:4px;">👤 GUEST AGENT</div>
             <div style="font-size:11px; color:#94A3B8; margin-bottom:8px;">Scores saved locally. Sign in with Google to persist cloud scores.</div>
         </div>
         """, unsafe_allow_html=True)
-        if auth_url:
-            st.sidebar.markdown(f"""
-            <a href="{auth_url}" target="_self" style="display:block; text-align:center; background:#0B2247; border:1px solid #76FF03; color:#76FF03; padding:8px 12px; border-radius:6px; font-family:'Orbitron'; font-size:11px; font-weight:800; text-decoration:none; margin-bottom:8px;">
-                ⚡ SIGN IN WITH GOOGLE
-            </a>
-            """, unsafe_allow_html=True)
+        if AuthService.is_oauth_configured() and hasattr(st, "login"):
+            st.sidebar.button("⚡ SIGN IN WITH GOOGLE", on_click=st.login, use_container_width=True)
 
 
 def render_game_score_card(game_name: str, difficulty: str, solved: bool, **kwargs):
-    """Calculates and renders celebratory Cyberpunk score card with durable database submission."""
-    elapsed = max(1, int(time.time() - st.session_state.get("game_start_time", time.time())))
+    """Calculates and renders transparent, celebratory Cyberpunk score card with durable database submission."""
+    elapsed = kwargs.get("elapsed_seconds")
+    if elapsed is None:
+        elapsed = max(1, int(time.time() - st.session_state.get("game_start_time", time.time())))
+    
     score_data = ScoringEngine.calculate_score(
         game=game_name,
         difficulty=difficulty,
         solved=solved,
         time_seconds=elapsed,
+        seed=st.session_state.seed,
         **kwargs
     )
     
@@ -390,33 +398,69 @@ def render_game_score_card(game_name: str, difficulty: str, solved: bool, **kwar
             cloud_status_color = "#00E5FF"
             
     tot_score = score_data.get("total_score", 0)
-    summary_text = score_data.get("summary", "")
+    base_score = score_data.get("base_score", 10000 if solved else 0)
+    time_penalty = score_data.get("time_penalty", elapsed * 10 if solved else 0)
+    status_title = "🏆 PROTOCOL COMPLETE" if solved else "💀 PROTOCOL INCOMPLETE"
+    status_title_color = "#76FF03" if solved else "#FF1744"
+    border_color = "#76FF03" if solved else "#FF1744"
     
+    # Build game-specific telemetry tags
+    telemetry_items = [f"<span><b>Difficulty:</b> {difficulty.upper()}</span>", f"<span><b>Seed:</b> #{st.session_state.seed}</span>"]
+    if "mistakes" in kwargs:
+        telemetry_items.append(f"<span><b>Mistakes:</b> {kwargs['mistakes']}</span>")
+    if "hints" in kwargs:
+        telemetry_items.append(f"<span><b>Hints:</b> {kwargs['hints']}</span>")
+    if "moves" in kwargs and game_name != "laser":
+        telemetry_items.append(f"<span><b>Moves:</b> {kwargs['moves']}</span>")
+    if "pushes" in kwargs:
+        telemetry_items.append(f"<span><b>Pushes:</b> {kwargs['pushes']}</span>")
+    if "rotations" in kwargs:
+        telemetry_items.append(f"<span><b>Rotations:</b> {kwargs['rotations']}</span>")
+    if "remaining_lives" in kwargs:
+        telemetry_items.append(f"<span><b>Lives Left:</b> {kwargs['remaining_lives']}/3</span>")
+    if "safe_cleared" in kwargs:
+        telemetry_items.append(f"<span><b>Safe Nodes:</b> {kwargs['safe_cleared']}</span>")
+    if "outcome" in kwargs:
+        telemetry_items.append(f"<span><b>Outcome:</b> {str(kwargs['outcome']).upper()}</span>")
+    
+    telemetry_html = " &bull; ".join(telemetry_items)
+
     st.markdown(f"""
-    <div style="background:rgba(6,16,36,0.95); border:2px solid #76FF03; border-radius:12px; padding:16px; margin:16px 0; box-shadow:0 0 30px rgba(118,255,3,0.25);">
-        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(118,255,3,0.3); padding-bottom:8px; margin-bottom:12px;">
-            <div>
-                <span style="font-family:'Orbitron'; font-size:14px; font-weight:900; color:#76FF03;">⚡ PROTOCOL COMPLETE — SCORE AUDIT</span>
-                <span style="font-size:12px; color:#94A3B8; margin-left:8px;">Seed #{st.session_state.seed}</span>
-            </div>
+    <div style="background:rgba(6,16,36,0.95); border:2px solid {border_color}; border-radius:12px; padding:20px; margin:16px 0; box-shadow:0 0 30px rgba(118,255,3,0.25);">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(0,229,255,0.25); padding-bottom:10px; margin-bottom:14px;">
+            <span style="font-family:'Orbitron'; font-size:16px; font-weight:900; color:{status_title_color};">{status_title}</span>
             <span style="font-family:'Orbitron'; font-size:11px; color:{cloud_status_color}; font-weight:700;">{cloud_status_text}</span>
         </div>
-        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:10px;">
-            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
-                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">FINAL SCORE</div>
-                <div style="font-size:22px; color:#76FF03; font-weight:900; font-family:'Orbitron';">{tot_score:,}</div>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+            <div style="background:rgba(2,8,20,0.85); border:1px solid rgba(0,229,255,0.25); border-radius:8px; padding:14px; text-align:center;">
+                <div style="font-size:11px; color:#94A3B8; font-family:'Orbitron'; font-weight:700;">TIME REQUIRED</div>
+                <div style="font-size:28px; color:#00E5FF; font-weight:900; font-family:'Orbitron'; margin-top:4px;">{elapsed} <span style="font-size:14px; font-weight:600;">sec</span></div>
             </div>
-            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
-                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">TIME ELAPSED</div>
-                <div style="font-size:22px; color:#00E5FF; font-weight:900; font-family:'Orbitron';">{elapsed}s</div>
-            </div>
-            <div style="background:rgba(2,8,20,0.8); border:1px solid rgba(0,229,255,0.2); border-radius:6px; padding:8px; text-align:center;">
-                <div style="font-size:10px; color:#94A3B8; font-family:'Orbitron';">DIFFICULTY MULTIPLIER</div>
-                <div style="font-size:22px; color:#FFD600; font-weight:900; font-family:'Orbitron';">{score_data.get('difficulty_multiplier', 1.0)}x</div>
+            <div style="background:rgba(2,8,20,0.85); border:1px solid rgba(118,255,3,0.35); border-radius:8px; padding:14px; text-align:center;">
+                <div style="font-size:11px; color:#94A3B8; font-family:'Orbitron'; font-weight:700;">LEADERBOARD SCORE</div>
+                <div style="font-size:28px; color:#76FF03; font-weight:900; font-family:'Orbitron'; margin-top:4px;">{tot_score:,} <span style="font-size:14px; font-weight:600;">pts</span></div>
             </div>
         </div>
-        <div style="background:rgba(0,229,255,0.06); padding:8px 12px; border-radius:6px; font-size:12px; color:#CBD5E1;">
-            <b>Audit Breakdown:</b> {summary_text}
+
+        <div style="background:rgba(4,13,30,0.9); border:1px solid rgba(0,229,255,0.2); border-radius:8px; padding:14px; font-family:'Fira Code', monospace; font-size:12px; color:#E2E8F0; margin-bottom:12px;">
+            <div style="font-family:'Orbitron'; font-size:11px; color:#00E5FF; font-weight:700; margin-bottom:8px; letter-spacing:1px;">📊 SCORE CALCULATION</div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>Base Score</span>
+                <span style="color:#76FF03;">+{base_score:,}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                <span>Time Penalty ({elapsed}s × 10 pts/s)</span>
+                <span style="color:#FF1744;">-{time_penalty:,}</span>
+            </div>
+            <div style="border-top:1px solid rgba(0,229,255,0.3); padding-top:6px; display:flex; justify-content:space-between; font-weight:700; font-size:13px;">
+                <span style="font-family:'Orbitron'; color:#00E5FF;">FINAL SCORE</span>
+                <span style="font-family:'Orbitron'; color:#76FF03;">{tot_score:,}</span>
+            </div>
+        </div>
+
+        <div style="font-size:11px; color:#94A3B8; font-family:'Rajdhani', sans-serif;">
+            <b>Session Telemetry:</b> {telemetry_html}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -655,6 +699,7 @@ def render_classic_sudoku_game():
     engine: SudokuEngine = st.session_state.sudoku_engine
     initial_board_json = json.dumps(engine.initial_grid)
     solution_json = json.dumps(engine.solution)
+    start_time_ms = int(st.session_state.get("game_start_time", time.time()) * 1000)
 
     solver = SudokuAISolver(engine.initial_grid)
     ai_res = solver.solve()
@@ -758,35 +803,33 @@ def render_classic_sudoku_game():
             display: grid;
             grid-template-columns: repeat(9, 44px);
             grid-template-rows: repeat(9, 44px);
-            gap: 0;
-            background: #020610;
+            gap: 2px;
+            background: #020814;
             border: 3px solid #00E5FF;
-            border-radius: 6px;
-            box-shadow: 0 0 25px rgba(0, 229, 255, 0.35);
+            padding: 4px;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
         }}
         .cell {{
-            width: 44px;
-            height: 44px;
-            background: #061224;
-            border: 1px solid #142847;
+            background: rgba(11, 34, 71, 0.9);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Fira Code', monospace;
-            font-size: 20px;
-            font-weight: 700;
+            font-size: 18px;
+            font-weight: bold;
+            font-family: 'Orbitron', monospace;
             cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.15s ease;
             position: relative;
-            transition: background 0.15s ease;
         }}
-        .cell.b-r {{ border-right: 3px solid #00E5FF; }}
-        .cell.b-b {{ border-bottom: 3px solid #00E5FF; }}
-        .cell.fixed {{ color: #00E5FF; font-weight: 800; }}
-        .cell.user {{ color: #76FF03; font-weight: 800; }}
-        .cell.selected {{ background: #003B5C !important; box-shadow: inset 0 0 10px #00E5FF; }}
-        .cell.highlight-num {{ background: #00223D; color: #FFD600; }}
-        .cell.highlight-peer {{ background: #0B2240; }}
-        .cell.error {{ background: #4A0E17 !important; color: #FF1744 !important; }}
+        .cell.fixed {{ color: #76FF03; font-weight: 900; background: rgba(11, 34, 71, 0.6); }}
+        .cell.user {{ color: #00E5FF; font-weight: 700; }}
+        .cell.selected {{ background: rgba(0, 229, 255, 0.45); border: 2px solid #00E5FF; box-shadow: inset 0 0 10px #00E5FF; }}
+        .cell.highlight-peer {{ background: rgba(0, 229, 255, 0.15); }}
+        .cell.highlight-num {{ background: rgba(118, 255, 3, 0.25); border: 1px solid #76FF03; }}
+        .cell.b-r {{ margin-right: 4px; }}
+        .cell.b-b {{ margin-bottom: 4px; }}
         .notes-grid {{
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -798,78 +841,84 @@ def render_classic_sudoku_game():
         }}
         .note-item {{
             font-size: 8px;
+            font-family: 'Fira Code', monospace;
             color: #94A3B8;
             display: flex;
             align-items: center;
             justify-content: center;
-            line-height: 1;
-            font-family: 'Fira Code', monospace;
         }}
         .controls-area {{
-            margin-top: 14px;
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 12px;
+            margin-top: 10px;
             width: 100%;
         }}
         .keypad {{
             display: grid;
-            grid-template-columns: repeat(9, 46px);
-            gap: 8px;
-            justify-content: center;
-            width: 100%;
-            margin-bottom: 4px;
+            grid-template-columns: repeat(9, 44px);
+            gap: 6px;
         }}
         .key-btn {{
-            width: 46px;
-            height: 46px;
-            background: #0A1C36;
-            border: 1.5px solid #00E5FF;
+            height: 40px;
+            background: rgba(11, 34, 71, 0.85);
+            border: 1px solid #00E5FF;
             color: #00E5FF;
-            border-radius: 8px;
-            font-family: 'Orbitron', sans-serif;
-            font-size: 19px;
+            font-family: 'Orbitron', monospace;
+            font-size: 16px;
             font-weight: 800;
             display: flex;
             align-items: center;
             justify-content: center;
+            border-radius: 6px;
             cursor: pointer;
-            transition: all 0.15s ease;
-            box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+            transition: all 0.12s ease;
         }}
         .key-btn:hover {{
             background: #00E5FF;
-            color: #000;
-            box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
-            transform: translateY(-2px);
+            color: #041024;
+            box-shadow: 0 0 15px #00E5FF;
         }}
         .key-btn.completed {{
             opacity: 0.35;
             border-color: #475569;
-            color: #64748B;
-            box-shadow: none;
-            transform: none;
+            color: #475569;
+            cursor: default;
         }}
-        .action-row {{ display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }}
+        .action-row {{
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }}
         .tool-btn {{
-            padding: 8px 14px;
-            background: #0A1C36;
+            padding: 6px 14px;
+            background: rgba(11, 34, 71, 0.9);
             border: 1px solid #00E5FF;
-            color: #00E5FF;
-            border-radius: 6px;
+            color: #E2E8F0;
             font-family: 'Orbitron', sans-serif;
             font-size: 11px;
-            font-weight: 700;
+            border-radius: 6px;
             cursor: pointer;
             transition: all 0.15s ease;
         }}
-        .tool-btn:hover {{ background: #00E5FF; color: #000; }}
+        .tool-btn:hover {{
+            background: rgba(0, 229, 255, 0.25);
+            color: #00E5FF;
+            border-color: #00E5FF;
+        }}
+        .tool-btn.active {{
+            background: #76FF03;
+            color: #041024;
+            border-color: #76FF03;
+            font-weight: 800;
+        }}
         .modal-overlay {{
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(3, 8, 18, 0.94);
-            border-radius: 12px;
+            background: rgba(4, 16, 36, 0.94);
+            border-radius: 15px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -949,12 +998,12 @@ def render_classic_sudoku_game():
             const solution = {solution_json};
             const aiSteps = {ai_steps_json};
             const expData = {ai_explanation_json};
+            const startTimeMs = {start_time_ms};
             let board = JSON.parse(JSON.stringify(initialBoard));
             let notes = {{}};
             let selected = null;
             let mistakes = 0;
             let notesMode = false;
-            let timerSeconds = 0;
             let timerInterval = null;
             let aiPlaying = false;
             let aiInterval = null;
@@ -968,6 +1017,16 @@ def render_classic_sudoku_game():
             const loseModal = document.getElementById('loseModal');
             const fixed = new Set();
             for (let r=0; r<9; r++) {{ for (let c=0; c<9; c++) {{ if (initialBoard[r][c] !== 0) fixed.add(r+','+c); }} }}
+
+            function updateTimer() {{
+                const elapsedSec = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+                const secs = String(elapsedSec % 60).padStart(2, '0');
+                const timerEl = document.getElementById('timerTxt');
+                if (timerEl) timerEl.textContent = '⏱️ ' + mins + ':' + secs;
+            }}
+            timerInterval = setInterval(updateTimer, 1000);
+            updateTimer();
 
             function playSound(freq, dur, type='sine') {{
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -983,15 +1042,12 @@ def render_classic_sudoku_game():
             function renderGrid() {{
                 grid.innerHTML = '';
                 const selVal = selected ? board[selected.r][selected.c] : 0;
-                const selBoxR = selected ? Math.floor(selected.r / 3) : -1;
-                const selBoxC = selected ? Math.floor(selected.c / 3) : -1;
-
                 for (let r = 0; r < 9; r++) {{
                     for (let c = 0; c < 9; c++) {{
                         const cell = document.createElement('div');
                         cell.className = 'cell';
-                        if (c === 2 || c === 5) cell.classList.add('b-r');
-                        if (r === 2 || r === 5) cell.classList.add('b-b');
+                        if (c % 3 === 2 && c !== 8) cell.classList.add('b-r');
+                        if (r % 3 === 2 && r !== 8) cell.classList.add('b-b');
                         const val = board[r][c];
                         const k = r + ',' + c;
 
@@ -1010,22 +1066,15 @@ def render_classic_sudoku_game():
                             cell.appendChild(nGrid);
                         }}
 
-                        if (selected && selected.r === r && selected.c === c) {{
-                            cell.classList.add('selected');
-                        }} else if (selVal !== 0 && val === selVal) {{
-                            cell.classList.add('highlight-num');
-                        }} else if (selected && (selected.r === r || selected.c === c || (Math.floor(r / 3) === selBoxR && Math.floor(c / 3) === selBoxC))) {{
-                            cell.classList.add('highlight-peer');
-                        }}
+                        if (selected && selected.r === r && selected.c === c) cell.classList.add('selected');
+                        else if (selVal !== 0 && val === selVal) cell.classList.add('highlight-num');
 
                         cell.onclick = () => {{
                             if (aiPlaying) stopAI();
                             selected = {{r, c}};
                             renderGrid();
-                            renderKeypad();
                             playSound(600, 0.05, 'sine');
                         }};
-
                         grid.appendChild(cell);
                     }}
                 }}
@@ -1033,16 +1082,10 @@ def render_classic_sudoku_game():
 
             function renderKeypad() {{
                 keypad.innerHTML = '';
-                const counts = getNumberCounts();
                 for (let i = 1; i <= 9; i++) {{
                     const btn = document.createElement('div');
                     btn.className = 'key-btn';
-                    if (counts[i] >= 9) {{
-                        btn.classList.add('completed');
-                        btn.textContent = '✓';
-                    }} else {{
-                        btn.textContent = i;
-                    }}
+                    btn.textContent = i;
                     btn.onclick = () => handleInput(i);
                     keypad.appendChild(btn);
                 }}
@@ -1050,25 +1093,15 @@ def render_classic_sudoku_game():
 
             function toggleNotesMode() {{
                 notesMode = !notesMode;
-                if (notesMode) {{
-                    btnNotes.classList.add('active');
-                    btnNotes.textContent = '✏️ NOTES: ON';
-                }} else {{
-                    btnNotes.classList.remove('active');
-                    btnNotes.textContent = '✏️ NOTES: OFF';
-                }}
-                playSound(400, 0.06, 'triangle');
+                btnNotes.className = 'tool-btn ' + (notesMode ? 'active' : '');
+                btnNotes.textContent = '✏️ NOTES: ' + (notesMode ? 'ON' : 'OFF');
             }}
 
             function eraseCurrent() {{
-                if (!selected) return;
-                const {{r, c}} = selected;
-                if (fixed.has(r + ',' + c)) return;
-                board[r][c] = 0;
-                delete notes[r + ',' + c];
-                playSound(300, 0.08, 'sawtooth');
+                if (!selected || fixed.has(selected.r + ',' + selected.c)) return;
+                board[selected.r][selected.c] = 0;
+                delete notes[selected.r + ',' + selected.c];
                 renderGrid();
-                renderKeypad();
             }}
 
             function getHint() {{
@@ -1079,11 +1112,9 @@ def render_classic_sudoku_game():
                             board[r][c] = solution[r][c];
                             selected = {{r, c}};
                             delete notes[r + ',' + c];
-                            removeNoteFromPeers(r, c, solution[r][c]);
-                            playSound(784, 0.2, 'sine');
                             renderGrid();
-                            renderKeypad();
                             if (checkWin()) {{
+                                if (timerInterval) clearInterval(timerInterval);
                                 winModal.style.display = 'flex';
                                 playSound(880, 0.5, 'sine');
                             }}
@@ -1093,35 +1124,8 @@ def render_classic_sudoku_game():
                 }}
             }}
 
-            function removeNoteFromPeers(r, c, val) {{
-                const br = Math.floor(r / 3) * 3;
-                const bc = Math.floor(c / 3) * 3;
-                for (let i = 0; i < 9; i++) {{
-                    if (notes[r + ',' + i]) notes[r + ',' + i].delete(val);
-                    if (notes[i + ',' + c]) notes[i + ',' + c].delete(val);
-                }}
-                for (let dr = 0; dr < 3; dr++) {{
-                    for (let dc = 0; dc < 3; dc++) {{
-                        const k = (br + dr) + ',' + (bc + dc);
-                        if (notes[k]) notes[k].delete(val);
-                    }}
-                }}
-            }}
-
             function checkWin() {{
-                for (let r = 0; r < 9; r++) {{
-                    for (let c = 0; c < 9; c++) {{
-                        if (board[r][c] !== solution[r][c]) return false;
-                    }}
-                }}
-                return true;
-            }}
-
-            function getNumberCounts() {{
-                const counts = {{}};
-                for (let i=1; i<=9; i++) counts[i] = 0;
-                board.forEach(r => r.forEach(v => {{ if(v>0) counts[v]++; }}));
-                return counts;
+                return board.every((row, r) => row.every((val, c) => val === solution[r][c]));
             }}
 
             function resetGrid() {{
@@ -1133,76 +1137,63 @@ def render_classic_sudoku_game():
                 mistakesTxt.textContent = 'MISTAKES: 0/3';
                 winModal.style.display = 'none';
                 loseModal.style.display = 'none';
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(updateTimer, 1000);
+                updateTimer();
                 renderGrid();
                 renderKeypad();
-            }}
-
-            function toggleWatchAI() {{
-                if (aiPlaying) stopAI();
-                else startAI();
-            }}
-
-            function startAI() {{
-                aiPlaying = true;
-                btnWatchAI.textContent = '⏹️ STOP AI';
-                btnWatchAI.style.background = '#FF1744';
-                btnWatchAI.style.borderColor = '#FF1744';
-                document.getElementById('aiReasoningPanel').style.display = 'block';
-                aiStepIdx = 0;
-                board = JSON.parse(JSON.stringify(initialBoard));
-                aiInterval = setInterval(() => {{
-                    if (aiStepIdx >= aiSteps.length) {{
-                        stopAI();
-                        return;
-                    }}
-                    const step = aiSteps[aiStepIdx++];
-                    board[step.row][step.col] = step.val;
-                    document.getElementById('aiVarTxt').textContent = `(${{step.row+1}},${{step.col+1}})`;
-                    document.getElementById('aiDecisionTxt').textContent = step.reason;
-                    renderGrid();
-                }}, 140);
             }}
 
             function stopAI() {{
                 aiPlaying = false;
                 if (aiInterval) clearInterval(aiInterval);
                 btnWatchAI.textContent = '🤖 WATCH AI SOLVE';
-                btnWatchAI.style.background = 'rgba(0,229,255,0.18)';
-                btnWatchAI.style.borderColor = '#00E5FF';
+            }}
+
+            function toggleWatchAI() {{
+                if (aiPlaying) stopAI();
+                else {{
+                    aiPlaying = true;
+                    btnWatchAI.textContent = '⏹️ STOP AI';
+                    document.getElementById('aiReasoningPanel').style.display = 'block';
+                    aiStepIdx = 0;
+                    board = JSON.parse(JSON.stringify(initialBoard));
+                    aiInterval = setInterval(() => {{
+                        if (aiStepIdx >= aiSteps.length) {{ stopAI(); return; }}
+                        const step = aiSteps[aiStepIdx++];
+                        board[step.row][step.col] = step.val;
+                        document.getElementById('aiVarTxt').textContent = `(${{step.row+1}},${{step.col+1}})`;
+                        document.getElementById('aiDecisionTxt').textContent = step.reason;
+                        renderGrid();
+                    }}, 150);
+                }}
             }}
 
             function handleInput(num) {{
-                if (!selected) return;
-                const {{r, c}} = selected;
-                if (fixed.has(r + ',' + c)) return;
-                const k = r + ',' + c;
+                if (!selected || fixed.has(selected.r + ',' + selected.c)) return;
+                const k = selected.r + ',' + selected.c;
                 if (notesMode) {{
                     if (!notes[k]) notes[k] = new Set();
-                    if (notes[k].has(num)) notes[k].delete(num);
-                    else notes[k].add(num);
+                    if (notes[k].has(num)) notes[k].delete(num); else notes[k].add(num);
                 }} else {{
-                    if (solution[r][c] !== num) {{
+                    if (solution[selected.r][selected.c] !== num) {{
                         mistakes++;
                         mistakesTxt.textContent = `MISTAKES: ${{mistakes}}/3`;
-                        if (mistakes >= 3) loseModal.style.display = 'flex';
+                        if (mistakes >= 3) {{
+                            if (timerInterval) clearInterval(timerInterval);
+                            loseModal.style.display = 'flex';
+                        }}
                     }} else {{
-                        board[r][c] = num;
+                        board[selected.r][selected.c] = num;
                         delete notes[k];
-                        removeNoteFromPeers(r, c, num);
-                        if (checkWin()) winModal.style.display = 'flex';
+                        if (checkWin()) {{
+                            if (timerInterval) clearInterval(timerInterval);
+                            winModal.style.display = 'flex';
+                        }}
                     }}
                 }}
                 renderGrid();
-                renderKeypad();
             }}
-
-            window.addEventListener('keydown', (e) => {{
-                if (aiPlaying) stopAI();
-                const num = parseInt(e.key);
-                if (!isNaN(num) && num >= 1 && num <= 9) handleInput(num);
-                if (e.key === 'Backspace' || e.key === 'Delete') eraseCurrent();
-                if (e.key === 'n' || e.key === 'N') toggleNotesMode();
-            }});
 
             {get_explainability_js()}
 
@@ -1212,7 +1203,7 @@ def render_classic_sudoku_game():
     </body>
     </html>
     """
-    components.html(html_code, height=820)
+    render_game_html(html_code, height=820)
 
 
 # ====================================================================
@@ -1728,7 +1719,7 @@ def render_quantum_sudoku_game():
     </body>
     </html>
     """
-    components.html(html_code, height=880)
+    render_game_html(html_code, height=880)
 
 
 # ====================================================================
@@ -1747,6 +1738,7 @@ def render_sokoban_game():
     targets = list(engine.targets)
     boxes = list(engine.boxes)
     player = engine.player_pos
+    start_time_ms = int(st.session_state.get("game_start_time", time.time()) * 1000)
 
     solver = SokobanAISolver(engine.walls, engine.targets, engine.boxes, engine.player_pos)
     ai_res = solver.solve()
@@ -1868,6 +1860,7 @@ def render_sokoban_game():
     <body>
         <div class="game-panel">
             <div class="game-header">
+                <div style="color:#00E5FF;" id="timerTxt">⏱️ 00:00</div>
                 <div>MOVES: <span id="mvTxt">0</span></div>
                 <div>PUSHES: <span id="psTxt">0</span></div>
                 <div>CORES: <span id="crTxt">{len(boxes)}/{len(targets)}</span></div>
@@ -1938,12 +1931,14 @@ def render_sokoban_game():
             const initialBoxes = new Set({json.dumps([f"{x},{y}" for x, y in boxes])});
             const initialPlayer = {{x: {player[0]}, y: {player[1]}}};
             const aiSteps = {ai_steps_json};
+            const startTimeMs = {start_time_ms};
             
             let boxes = new Set(initialBoxes);
             let player = {{x: initialPlayer.x, y: initialPlayer.y}};
             let moves = 0, pushes = 0;
             let history = [];
             
+            let timerInterval = null;
             let aiPlaying = false;
             let aiInterval = null;
             let aiStepIdx = 0;
@@ -1953,6 +1948,16 @@ def render_sokoban_game():
             const aiListsTxt = document.getElementById('aiListsTxt');
             const aiScoresTxt = document.getElementById('aiScoresTxt');
             const aiDecisionTxt = document.getElementById('aiDecisionTxt');
+
+            function updateTimer() {{
+                const elapsedSec = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+                const secs = String(elapsedSec % 60).padStart(2, '0');
+                const timerEl = document.getElementById('timerTxt');
+                if (timerEl) timerEl.textContent = '⏱️ ' + mins + ':' + secs;
+            }}
+            timerInterval = setInterval(updateTimer, 1000);
+            updateTimer();
 
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             function playTone(freq, dur) {{
@@ -1994,9 +1999,9 @@ def render_sokoban_game():
                             ctx.fillText(onT ? '★' : '⚡', px+ts/2, py+ts/2);
                         }}
                         if (player.x === x && player.y === y) {{
-                            ctx.fillStyle = '#00E5FF'; ctx.beginPath(); ctx.arc(px+ts/2, py+ts/2, 16, 0, Math.PI*2); ctx.fill();
-                            ctx.fillStyle = '#000'; ctx.font = '16px Orbitron'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                            ctx.fillText('🤖', px+ts/2, py+ts/2);
+                            ctx.fillStyle = '#00E5FF';
+                            ctx.beginPath(); ctx.arc(px+ts/2, py+ts/2, 14, 0, Math.PI*2); ctx.fill();
+                            ctx.strokeStyle = '#FFF'; ctx.lineWidth = 2; ctx.stroke();
                         }}
                     }}
                 }}
@@ -2025,6 +2030,7 @@ def render_sokoban_game():
                     updateStats();
                     draw();
                     if (checkWin()) {{
+                        if (timerInterval) clearInterval(timerInterval);
                         document.getElementById('winMv').textContent = moves;
                         document.getElementById('winPs').textContent = pushes;
                         document.getElementById('winModal').style.display = 'flex';
@@ -2064,6 +2070,9 @@ def render_sokoban_game():
                 moves = 0; pushes = 0; history = [];
                 document.getElementById('winModal').style.display = 'none';
                 aiReasoningPanel.style.display = 'none';
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(updateTimer, 1000);
+                updateTimer();
                 updateStats(); draw();
             }}
 
@@ -2091,6 +2100,7 @@ def render_sokoban_game():
                         stopAI();
                         aiDecisionTxt.innerHTML = `✅ <b>A* COMPLETE:</b> All ${{targets.size}} cores locked onto targets in ${{aiSteps.length}} steps!`;
                         if (checkWin()) {{
+                            if (timerInterval) clearInterval(timerInterval);
                             document.getElementById('winMv').textContent = moves;
                             document.getElementById('winPs').textContent = pushes;
                             document.getElementById('winModal').style.display = 'flex';
@@ -2152,15 +2162,19 @@ def render_sokoban_game():
     </body>
     </html>
     """
-    components.html(html_code, height=max(engine.height * 46 + 400, 700))
+    render_game_html(html_code, height=max(engine.height * 46 + 400, 700))
 
 
+# ====================================================================
+# GAME 3: LASER MIRROR ROUTING (OPTICAL MATRIX CSP)
+# ====================================================================
 def render_laser_game():
     engine: LaserEngine = st.session_state.laser_engine
     mirrors_list = [{"x": x, "y": y, "type": m} for (x, y), m in engine.mirrors.items()]
     obstacles = list(engine.obstacles)
     emitters = engine.emitters
     detectors = engine.detectors
+    start_time_ms = int(st.session_state.get("game_start_time", time.time()) * 1000)
 
     solver = LaserAISolver(engine.width, engine.height, engine.emitters, engine.detectors, engine.obstacles, engine.mirrors)
     ai_res = solver.solve()
@@ -2202,6 +2216,7 @@ def render_laser_game():
             font-family: 'Orbitron', sans-serif;
             font-size: 13px;
             font-weight: 700;
+            color: #00E5FF;
         }}
         .ai-reasoning-panel {{
             width: 100%;
@@ -2243,40 +2258,36 @@ def render_laser_game():
             padding: 6px 10px;
             border-radius: 0 4px 4px 0;
             font-size: 12px;
-            color: #E2E8F0;
+            color: #FFFFFF;
         }}
-        .dec-lbl {{ font-family: 'Orbitron'; font-weight: 700; color: #76FF03; font-size: 10px; margin-right: 6px; }}
-        .board-area {{
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin: 8px 0;
-            width: 100%;
-        }}
-        canvas {{ border: 3px solid #00E5FF; border-radius: 8px; box-shadow: 0 0 20px rgba(0,229,255,0.2); background: #020712; }}
+        .dec-lbl {{ color: #76FF03; font-weight: 700; font-family: 'Orbitron'; }}
+        .board-area {{ display: flex; justify-content: center; align-items: center; width: 100%; }}
         .controls-area {{
             margin-top: 15px;
             display: flex;
-            gap: 12px;
             justify-content: center;
+            align-items: center;
+            gap: 15px;
             width: 100%;
         }}
+        canvas {{ background: #02050A; border: 2px solid #1E2D4A; border-radius: 8px; cursor: pointer; }}
         .act-btn {{
             padding: 8px 16px;
             background: #0A1C36;
             border: 1px solid #00E5FF;
             color: #00E5FF;
-            border-radius: 6px;
             font-family: 'Orbitron', sans-serif;
             font-size: 11px;
-            font-weight: bold;
+            font-weight: 700;
+            border-radius: 6px;
             cursor: pointer;
+            transition: all 0.15s ease;
         }}
         .act-btn:hover {{ background: #00E5FF; color: #000; }}
         .modal-overlay {{
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(3, 8, 18, 0.92);
+            background: rgba(3, 8, 18, 0.94);
             border-radius: 12px;
             display: flex;
             flex-direction: column;
@@ -2289,6 +2300,7 @@ def render_laser_game():
     <body>
         <div class="game-panel">
             <div class="game-header">
+                <div style="color:#00E5FF;" id="timerTxt">⏱️ 00:00</div>
                 <div>ROTATIONS: <span id="rotTxt">0</span></div>
                 <div>DETECTORS: <span id="dtTxt">0/{len(detectors)}</span></div>
                 <div>{engine.difficulty.upper()}</div>
@@ -2337,7 +2349,6 @@ def render_laser_game():
                     <button class="act-btn" style="padding:10px 18px;" onclick="resetLvl()">🔄 REPLAY</button>
                 </div>
             </div>
-
             {get_explainability_modal_html()}
         </div>
 
@@ -2345,18 +2356,19 @@ def render_laser_game():
             const cv = document.getElementById('cv');
             const ctx = cv.getContext('2d');
             const ts = 46;
-            const mirrorsList = {json.dumps(mirrors_list)};
             const obstacles = new Set({json.dumps([f"{x},{y}" for x, y in obstacles])});
             const emitters = {json.dumps(emitters)};
             const detectors = {json.dumps(detectors)};
+            const mirrorsList = {json.dumps(mirrors_list)};
             const aiSteps = {ai_steps_json};
-            const expData = {ai_explanation_json};
+            const startTimeMs = {start_time_ms};
             
             let mirrors = {{}};
             for (const m of mirrorsList) mirrors[`${{m.x}},${{m.y}}`] = m.type;
             const initialMirrors = JSON.parse(JSON.stringify(mirrors));
             let rotations = 0;
             
+            let timerInterval = null;
             let aiPlaying = false;
             let aiInterval = null;
             let aiStepIdx = 0;
@@ -2366,6 +2378,16 @@ def render_laser_game():
             const aiAngleTxt = document.getElementById('aiAngleTxt');
             const aiSearchTxt = document.getElementById('aiSearchTxt');
             const aiDecisionTxt = document.getElementById('aiDecisionTxt');
+
+            function updateTimer() {{
+                const elapsedSec = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+                const secs = String(elapsedSec % 60).padStart(2, '0');
+                const timerEl = document.getElementById('timerTxt');
+                if (timerEl) timerEl.textContent = '⏱️ ' + mins + ':' + secs;
+            }}
+            timerInterval = setInterval(updateTimer, 1000);
+            updateTimer();
 
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             function playTone(freq, dur) {{
@@ -2389,67 +2411,43 @@ def render_laser_game():
                         ctx.strokeStyle = 'rgba(0, 229, 255, 0.08)'; ctx.strokeRect(px, py, ts, ts);
                     }}
                 }}
-
                 for (const o of obstacles) {{
                     const [ox, oy] = o.split(',').map(Number);
                     const px = ox * ts, py = oy * ts;
                     ctx.fillStyle = '#1E293B'; ctx.fillRect(px + 4, py + 4, ts - 8, ts - 8);
                     ctx.strokeStyle = '#64748B'; ctx.strokeRect(px + 4, py + 4, ts - 8, ts - 8);
                 }}
-
                 const {{ paths, activated }} = traceBeams();
                 document.getElementById('dtTxt').textContent = activated.size + '/' + detectors.length;
-
-                ctx.lineWidth = 3;
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = '#00E5FF';
-                ctx.strokeStyle = '#00E5FF';
+                ctx.lineWidth = 3; ctx.shadowBlur = 10; ctx.shadowColor = '#00E5FF'; ctx.strokeStyle = '#00E5FF';
                 for (const path of paths) {{
                     if (path.length < 2) continue;
                     ctx.beginPath();
                     ctx.moveTo(path[0].x * ts + ts / 2, path[0].y * ts + ts / 2);
-                    for (let i = 1; i < path.length; i++) {{
-                        ctx.lineTo(path[i].x * ts + ts / 2, path[i].y * ts + ts / 2);
-                    }}
+                    for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x * ts + ts / 2, path[i].y * ts + ts / 2);
                     ctx.stroke();
                 }}
                 ctx.shadowBlur = 0;
-
                 for (const em of emitters) {{
                     const px = em.pos[0] * ts + ts / 2, py = em.pos[1] * ts + ts / 2;
-                    ctx.fillStyle = '#FFD600';
-                    ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
-                    ctx.font = '12px Orbitron'; ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('⚡', px, py);
+                    ctx.fillStyle = '#FFD600'; ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
+                    ctx.font = '12px Orbitron'; ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.fillText('⚡', px, py);
                 }}
-
                 for (const dt of detectors) {{
                     const isAct = activated.has(`${{dt[0]}},${{dt[1]}}`);
                     const px = dt[0] * ts + ts / 2, py = dt[1] * ts + ts / 2;
                     ctx.fillStyle = isAct ? '#76FF03' : '#475569';
                     ctx.beginPath(); ctx.arc(px, py, 11, 0, Math.PI * 2); ctx.fill();
-                    ctx.font = '12px Orbitron'; ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('🔮', px, py);
+                    ctx.font = '12px Orbitron'; ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.fillText('🔮', px, py);
                 }}
-
                 for (const [k, mtype] of Object.entries(mirrors)) {{
                     const [mx, my] = k.split(',').map(Number);
                     const px = mx * ts, py = my * ts;
-                    ctx.fillStyle = 'rgba(0, 229, 255, 0.15)';
-                    ctx.fillRect(px + 4, py + 4, ts - 8, ts - 8);
-                    ctx.strokeStyle = '#00E5FF'; ctx.lineWidth = 2;
-                    ctx.strokeRect(px + 4, py + 4, ts - 8, ts - 8);
-
-                    ctx.lineWidth = 4;
-                    ctx.strokeStyle = '#FFD600';
-                    ctx.beginPath();
-                    if (mtype === '/') {{
-                        ctx.moveTo(px + ts - 8, py + 8);
-                        ctx.lineTo(px + 8, py + ts - 8);
-                    }} else {{
-                        ctx.moveTo(px + 8, py + 8);
-                        ctx.lineTo(px + ts - 8, py + ts - 8);
-                    }}
+                    ctx.fillStyle = 'rgba(0, 229, 255, 0.15)'; ctx.fillRect(px + 4, py + 4, ts - 8, ts - 8);
+                    ctx.strokeStyle = '#00E5FF'; ctx.lineWidth = 2; ctx.strokeRect(px + 4, py + 4, ts - 8, ts - 8);
+                    ctx.lineWidth = 4; ctx.strokeStyle = '#FFD600'; ctx.beginPath();
+                    if (mtype === '/') {{ ctx.moveTo(px + ts - 8, py + 8); ctx.lineTo(px + 8, py + ts - 8); }}
+                    else {{ ctx.moveTo(px + 8, py + 8); ctx.lineTo(px + ts - 8, py + ts - 8); }}
                     ctx.stroke();
                 }}
             }}
@@ -2457,23 +2455,22 @@ def render_laser_game():
             function traceBeams() {{
                 const paths = [];
                 const activated = new Set();
+                const detSet = new Set(detectors.map(d => `${{d[0]}},${{d[1]}}`));
                 for (const em of emitters) {{
-                    const path = [{{x: em.pos[0], y: em.pos[1]}}];
+                    const path = [{{ x: em.pos[0], y: em.pos[1] }}];
                     let cx = em.pos[0], cy = em.pos[1];
-                    let dx = em.dir[0], dy = em.dir[1];
-                    for (let step = 0; step < 64; step++) {{
-                        cx += dx; cy += dy;
+                    let cdx = em.dir[0], cdy = em.dir[1];
+                    for (let step = 0; step < 60; step++) {{
+                        cx += cdx; cy += cdy;
                         if (cx < 0 || cx >= {engine.width} || cy < 0 || cy >= {engine.height}) break;
-                        path.push({{x: cx, y: cy}});
                         const k = `${{cx}},${{cy}}`;
+                        path.push({{ x: cx, y: cy }});
                         if (obstacles.has(k)) break;
-                        if (detectors.some(d => d[0] === cx && d[1] === cy)) {{
-                            activated.add(k);
-                        }}
+                        if (detSet.has(k)) activated.add(k);
                         if (mirrors[k]) {{
-                            const m = mirrors[k];
-                            if (m === '/') {{ const temp = dx; dx = -dy; dy = -temp; }}
-                            else if (m === '\\\\') {{ const temp = dx; dx = dy; dy = temp; }}
+                            const mtype = mirrors[k];
+                            if (mtype === '/') {{ const ndx = -cdy, ndy = -cdx; cdx = ndx; cdy = ndy; }}
+                            else {{ const ndx = cdy, ndy = cdx; cdx = ndx; cdy = ndy; }}
                         }}
                     }}
                     paths.push(path);
@@ -2483,18 +2480,17 @@ def render_laser_game():
 
             function rotateMirror(mx, my) {{
                 const k = `${{mx}},${{my}}`;
-                if (mirrors[k]) {{
-                    mirrors[k] = (mirrors[k] === '/') ? '\\\\' : '/';
-                    rotations++;
-                    document.getElementById('rotTxt').textContent = rotations;
-                    playTone(440, 0.08);
-                    draw();
-                    checkWin();
-                }}
+                if (!mirrors[k]) return;
+                if (aiPlaying) stopAI();
+                mirrors[k] = mirrors[k] === '/' ? '\\\\' : '/';
+                rotations++;
+                document.getElementById('rotTxt').textContent = rotations;
+                playTone(480, 0.08);
+                draw();
+                checkWin();
             }}
 
             cv.addEventListener('click', (e) => {{
-                if (aiPlaying) stopAI();
                 const rect = cv.getBoundingClientRect();
                 const mx = Math.floor((e.clientX - rect.left) / ts);
                 const my = Math.floor((e.clientY - rect.top) / ts);
@@ -2504,6 +2500,7 @@ def render_laser_game():
             function checkWin() {{
                 const {{ activated }} = traceBeams();
                 if (activated.size === detectors.length) {{
+                    if (timerInterval) clearInterval(timerInterval);
                     document.getElementById('winModal').style.display = 'flex';
                     playTone(880, 0.5);
                     return true;
@@ -2518,6 +2515,9 @@ def render_laser_game():
                 document.getElementById('rotTxt').textContent = '0';
                 document.getElementById('winModal').style.display = 'none';
                 aiReasoningPanel.style.display = 'none';
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(updateTimer, 1000);
+                updateTimer();
                 draw();
             }}
 
@@ -2542,36 +2542,31 @@ def render_laser_game():
                 btnWatchAI.style.color = '#FFF';
                 aiReasoningPanel.style.display = 'block';
                 aiStepIdx = 0;
-
                 mirrors = JSON.parse(JSON.stringify(initialMirrors));
                 rotations = 0;
                 document.getElementById('rotTxt').textContent = '0';
-
                 aiInterval = setInterval(() => {{
                     if (aiStepIdx >= aiSteps.length) {{
                         stopAI();
                         aiDecisionTxt.innerHTML = `✅ <b>OPTICAL HARMONY:</b> All ${{detectors.length}} detectors energized in ${{aiSteps.length}} rotations!`;
                         if (checkWin()) {{
+                            if (timerInterval) clearInterval(timerInterval);
                             document.getElementById('winModal').style.display = 'flex';
                             playTone(880, 0.5);
                         }}
                         return;
                     }}
-
                     const step = aiSteps[aiStepIdx];
                     aiStepIdx++;
                     const {{ x, y, to_type, reason, reflection_angle, testing_rotation, simulation_trace }} = step;
-
                     mirrors[`${{x}},${{y}}`] = to_type;
                     rotations++;
                     document.getElementById('rotTxt').textContent = rotations;
                     playTone(550 + (aiStepIdx * 60), 0.12);
-
                     aiSimTxt.textContent = simulation_trace || "Emitter ➔ Mirror ➔ Detector";
                     aiAngleTxt.textContent = `Mirror (${{x}},${{y}}) ➔ '${{to_type}}' (${{reflection_angle || '45° Optics'}})`;
                     aiSearchTxt.textContent = testing_rotation || `Config ${{aiStepIdx}}/${{aiSteps.length}}`;
                     aiDecisionTxt.textContent = `Rotate Mirror (${{x}},${{y}}) to redirect beam vector.`;
-
                     draw();
                 }}, 280);
             }}
@@ -2593,7 +2588,7 @@ def render_laser_game():
     </body>
     </html>
     """
-    components.html(html_code, height=max(engine.height * 46 + 400, 700))
+    render_game_html(html_code, height=max(engine.height * 46 + 400, 700))
 
 
 # ====================================================================
@@ -2601,6 +2596,7 @@ def render_laser_game():
 # ====================================================================
 def render_minesweeper_game():
     engine: CircuitMinesweeperEngine = st.session_state.minesweeper_engine
+    start_time_ms = int(st.session_state.get("game_start_time", time.time()) * 1000)
     
     solver = MinesweeperAISolver(engine.width, engine.height, engine.mines)
     ai_res = solver.solve()
@@ -2926,6 +2922,7 @@ def render_minesweeper_game():
             const numMines = {engine.num_mines};
             const totalSafe = width * height - numMines;
             const aiSteps = {ai_steps_json};
+            const startTimeMs = {start_time_ms};
 
             let mines = new Set();
             let revealed = new Set();
@@ -2933,7 +2930,6 @@ def render_minesweeper_game():
             let lives = 3;
             let isFirstClick = true;
             let currentMode = 'reveal'; // 'reveal' | 'flag' | 'question'
-            let timerSeconds = 0;
             let timerInterval = null;
             let isGameOver = false;
 
@@ -2965,6 +2961,15 @@ def render_minesweeper_game():
             const aiConfTxt = document.getElementById('aiConfTxt');
             const aiDecisionTxt = document.getElementById('aiDecisionTxt');
 
+            function updateTimer() {{
+                const elapsedSec = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+                const secs = String(elapsedSec % 60).padStart(2, '0');
+                if (timerTxt) timerTxt.textContent = '⏱️ ' + mins + ':' + secs;
+            }}
+            timerInterval = setInterval(updateTimer, 1000);
+            updateTimer();
+
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             function playTone(freq, dur, type='sine') {{
                 try {{
@@ -2977,16 +2982,6 @@ def render_minesweeper_game():
                     osc.connect(gain); gain.connect(audioCtx.destination);
                     osc.start(); osc.stop(audioCtx.currentTime + dur);
                 }} catch(e) {{}}
-            }}
-
-            function startTimer() {{
-                if (timerInterval) return;
-                timerInterval = setInterval(() => {{
-                    timerSeconds++;
-                    const mins = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
-                    const secs = String(timerSeconds % 60).padStart(2, '0');
-                    timerTxt.textContent = '⏱️ ' + mins + ':' + secs;
-                }}, 1000);
             }}
 
             function updateHUD() {{
@@ -3269,12 +3264,13 @@ def render_minesweeper_game():
                 const safeRevealed = Array.from(revealed).filter(k => !mines.has(k)).length;
                 if (safeRevealed >= totalSafe && !isGameOver) {{
                     isGameOver = true;
-                    clearInterval(timerInterval);
-                    const mins = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
-                    const secs = String(timerSeconds % 60).padStart(2, '0');
+                    if (timerInterval) clearInterval(timerInterval);
+                    const elapsedSec = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                    const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+                    const secs = String(elapsedSec % 60).padStart(2, '0');
                     document.getElementById('winTimeTxt').textContent = mins + ':' + secs;
                     
-                    const score = Math.max(500, (totalSafe * 100) + (lives * 500) - (timerSeconds * 10));
+                    const score = Math.max(500, (totalSafe * 100) + (lives * 500) - (elapsedSec * 10));
                     document.getElementById('winScoreTxt').textContent = score.toLocaleString() + ' PTS';
                     document.getElementById('winSafeTxt').textContent = totalSafe + ' / ' + totalSafe;
                     document.getElementById('winLivesTxt').textContent = '❤️ ' + lives + '/3';
@@ -3300,8 +3296,9 @@ def render_minesweeper_game():
                 stopAI();
                 mines.clear(); revealed.clear(); marks.clear();
                 lives = 3; isFirstClick = true; isGameOver = false;
-                clearInterval(timerInterval); timerInterval = null; timerSeconds = 0;
-                timerTxt.textContent = '⏱️ 00:00';
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(updateTimer, 1000);
+                updateTimer();
                 winModal.style.display = 'none';
                 loseModal.style.display = 'none';
                 aiReasoningPanel.style.display = 'none';
@@ -3325,7 +3322,9 @@ def render_minesweeper_game():
                 aiStepIdx = 0;
                 mines.clear(); revealed.clear(); marks.clear();
                 lives = 3; isFirstClick = false; isGameOver = false;
-                startTimer();
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(updateTimer, 1000);
+                updateTimer();
 
                 aiInterval = setInterval(() => {{
                     const safeRevealed = Array.from(revealed).filter(k => !mines.has(k)).length;
@@ -3377,7 +3376,7 @@ def render_minesweeper_game():
     </body>
     </html>
     """
-    components.html(html_code, height=max(engine.height * 44 + 480, 720))
+    render_game_html(html_code, height=max(engine.height * 44 + 480, 720))
 
 
 # ====================================================================
@@ -3467,15 +3466,127 @@ def render_puzzle_arena_tab():
     if gid == "sudoku":
         st.caption("🎯 Objective: Fill the 9x9 grid with numbers 1-9 so that every row, column, and 3x3 block contains distinct digits.")
         render_sudoku_game()
+        
+        st.markdown("---")
+        c_sub1, c_sub2 = st.columns([2, 3])
+        with c_sub1:
+            if st.button("🏆 Complete Protocol & Calculate Score", key="sub_sudoku_btn", use_container_width=True):
+                st.session_state.game_completed[st.session_state.game_session_id] = {
+                    "game_name": "sudoku",
+                    "difficulty": st.session_state.difficulty,
+                    "solved": True,
+                    "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
+                    "mistakes": 0,
+                    "hints": 0
+                }
+                st.balloons()
+                st.rerun()
+
+        if st.session_state.game_session_id in st.session_state.get("game_completed", {}):
+            data = st.session_state.game_completed[st.session_state.game_session_id]
+            render_game_score_card(
+                game_name="sudoku",
+                difficulty=data.get("difficulty", st.session_state.difficulty),
+                solved=data.get("solved", True),
+                elapsed_seconds=data.get("time_seconds"),
+                mistakes=data.get("mistakes", 0),
+                hints=data.get("hints", 0)
+            )
+
     elif gid == "sokoban":
         st.caption("🎯 Objective: Navigate the cyber worker to push all ⚡ energy cores onto the designated 🎯 target pads.")
         render_sokoban_game()
+        
+        st.markdown("---")
+        c_sub1, c_sub2 = st.columns([2, 3])
+        with c_sub1:
+            if st.button("🏆 Complete Protocol & Calculate Score", key="sub_sokoban_btn", use_container_width=True):
+                eng = st.session_state.sokoban_engine
+                st.session_state.game_completed[st.session_state.game_session_id] = {
+                    "game_name": "sokoban",
+                    "difficulty": st.session_state.difficulty,
+                    "solved": True,
+                    "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
+                    "moves": getattr(eng, "moves", 15),
+                    "pushes": getattr(eng, "pushes", 6),
+                    "target_moves": getattr(eng, "target_moves", 15)
+                }
+                st.balloons()
+                st.rerun()
+
+        if st.session_state.game_session_id in st.session_state.get("game_completed", {}):
+            data = st.session_state.game_completed[st.session_state.game_session_id]
+            render_game_score_card(
+                game_name="sokoban",
+                difficulty=data.get("difficulty", st.session_state.difficulty),
+                solved=data.get("solved", True),
+                elapsed_seconds=data.get("time_seconds"),
+                moves=data.get("moves", 15),
+                pushes=data.get("pushes", 6),
+                target_moves=data.get("target_moves", 15)
+            )
+
     elif gid == "laser":
         st.caption("🎯 Objective: Click mirrors to deflect the laser beam along a continuous optical vector and energize all 🔮 target detector cores.")
         render_laser_game()
+        
+        st.markdown("---")
+        c_sub1, c_sub2 = st.columns([2, 3])
+        with c_sub1:
+            if st.button("🏆 Complete Protocol & Calculate Score", key="sub_laser_btn", use_container_width=True):
+                eng = st.session_state.laser_engine
+                st.session_state.game_completed[st.session_state.game_session_id] = {
+                    "game_name": "laser",
+                    "difficulty": st.session_state.difficulty,
+                    "solved": True,
+                    "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
+                    "rotations": getattr(eng, "rotations", 4)
+                }
+                st.balloons()
+                st.rerun()
+
+        if st.session_state.game_session_id in st.session_state.get("game_completed", {}):
+            data = st.session_state.game_completed[st.session_state.game_session_id]
+            render_game_score_card(
+                game_name="laser",
+                difficulty=data.get("difficulty", st.session_state.difficulty),
+                solved=data.get("solved", True),
+                elapsed_seconds=data.get("time_seconds"),
+                rotations=data.get("rotations", 4)
+            )
+
     elif gid == "minesweeper":
         st.caption("🎯 Objective: Uncover all safe high-voltage electrical nodes without triggering short-circuit fuses. Numbers reveal nearby fuses.")
         render_minesweeper_game()
+        
+        st.markdown("---")
+        c_sub1, c_sub2 = st.columns([2, 3])
+        with c_sub1:
+            if st.button("🏆 Complete Protocol & Calculate Score", key="sub_minesweeper_btn", use_container_width=True):
+                eng = st.session_state.minesweeper_engine
+                tot_safe = eng.width * eng.height - eng.num_mines
+                st.session_state.game_completed[st.session_state.game_session_id] = {
+                    "game_name": "minesweeper",
+                    "difficulty": st.session_state.difficulty,
+                    "solved": True,
+                    "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
+                    "remaining_lives": 3,
+                    "safe_cleared": tot_safe
+                }
+                st.balloons()
+                st.rerun()
+
+        if st.session_state.game_session_id in st.session_state.get("game_completed", {}):
+            data = st.session_state.game_completed[st.session_state.game_session_id]
+            render_game_score_card(
+                game_name="minesweeper",
+                difficulty=data.get("difficulty", st.session_state.difficulty),
+                solved=data.get("solved", True),
+                elapsed_seconds=data.get("time_seconds"),
+                remaining_lives=data.get("remaining_lives", 3),
+                safe_cleared=data.get("safe_cleared", 20)
+            )
+
     elif gid == "battle":
         st.caption("🎯 Objective: Align 4 quantum ions in a row (horizontal, vertical, or diagonal) before the AEGIS AI.")
         eng_bt: BattleArenaEngine = st.session_state.battle_engine
@@ -3546,6 +3657,16 @@ def render_puzzle_arena_tab():
 
             if eng_bt.game_over:
                 outcome_str = "win" if eng_bt.winner == 1 else ("loss" if eng_bt.winner == 2 else "draw")
+                if st.session_state.game_session_id not in st.session_state.get("game_completed", {}):
+                    st.session_state.game_completed[st.session_state.game_session_id] = {
+                        "game_name": "battle",
+                        "difficulty": st.session_state.difficulty,
+                        "solved": (eng_bt.winner == 1),
+                        "time_seconds": max(1, int(time.time() - st.session_state.get("game_start_time", time.time()))),
+                        "outcome": outcome_str,
+                        "moves": eng_bt.moves_count
+                    }
+                data = st.session_state.game_completed[st.session_state.game_session_id]
                 if eng_bt.winner == 1:
                     st.balloons()
                     st.success("🏆 VICTORY! Tactical alignment achieved!")
@@ -3555,10 +3676,11 @@ def render_puzzle_arena_tab():
                     st.warning("⚡ DRAW! Grid energy saturated.")
                 render_game_score_card(
                     game_name="battle",
-                    difficulty=st.session_state.difficulty,
-                    solved=(eng_bt.winner == 1 or eng_bt.winner == 0),
-                    outcome=outcome_str,
-                    moves=eng_bt.moves_count
+                    difficulty=data.get("difficulty", st.session_state.difficulty),
+                    solved=data.get("solved", eng_bt.winner == 1),
+                    elapsed_seconds=data.get("time_seconds"),
+                    outcome=data.get("outcome", outcome_str),
+                    moves=data.get("moves", eng_bt.moves_count)
                 )
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -4022,7 +4144,6 @@ def main():
     )
     st.markdown(CYBER_THEME_CSS, unsafe_allow_html=True)
     init_session_state()
-    handle_auth_callback()
 
     render_player_profile_sidebar()
     st.sidebar.markdown("## ⚡ NEXUS RESEARCH LAB")

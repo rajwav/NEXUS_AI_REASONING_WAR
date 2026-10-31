@@ -1,2 +1,3 @@
 # NEXUS AI REASONING WAR - Core Dependencies
 streamlit>=1.30.0
+authlib>=1.3.2

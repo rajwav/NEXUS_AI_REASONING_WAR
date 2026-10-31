@@ -48,24 +48,25 @@ class AuthService:
         client_id = ""
         client_secret = ""
         redirect_uri = ""
+        server_metadata_url = ""
 
         # Check st.secrets first
         try:
             if hasattr(st, "secrets"):
-                if "GOOGLE_CLIENT_ID" in st.secrets:
+                if "auth" in st.secrets:
+                    auth_sec = st.secrets["auth"]
+                    if hasattr(auth_sec, "get"):
+                        client_id = str(auth_sec.get("client_id", auth_sec.get("google_client_id", "")))
+                        client_secret = str(auth_sec.get("client_secret", auth_sec.get("google_client_secret", "")))
+                        redirect_uri = str(auth_sec.get("redirect_uri", ""))
+                        server_metadata_url = str(auth_sec.get("server_metadata_url", ""))
+
+                if not client_id and "GOOGLE_CLIENT_ID" in st.secrets:
                     client_id = str(st.secrets["GOOGLE_CLIENT_ID"])
-                elif "auth" in st.secrets and "google_client_id" in st.secrets["auth"]:
-                    client_id = str(st.secrets["auth"]["google_client_id"])
-
-                if "GOOGLE_CLIENT_SECRET" in st.secrets:
+                if not client_secret and "GOOGLE_CLIENT_SECRET" in st.secrets:
                     client_secret = str(st.secrets["GOOGLE_CLIENT_SECRET"])
-                elif "auth" in st.secrets and "google_client_secret" in st.secrets["auth"]:
-                    client_secret = str(st.secrets["auth"]["google_client_secret"])
-
-                if "REDIRECT_URI" in st.secrets:
+                if not redirect_uri and "REDIRECT_URI" in st.secrets:
                     redirect_uri = str(st.secrets["REDIRECT_URI"])
-                elif "auth" in st.secrets and "redirect_uri" in st.secrets["auth"]:
-                    redirect_uri = str(st.secrets["auth"]["redirect_uri"])
         except Exception:
             pass
 
@@ -75,18 +76,43 @@ class AuthService:
         if not client_secret:
             client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
         if not redirect_uri:
-            redirect_uri = os.environ.get("REDIRECT_URI", "http://localhost:8501")
+            redirect_uri = os.environ.get("REDIRECT_URI", "http://localhost:8501/oauth2callback")
 
         return {
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": redirect_uri
+            "redirect_uri": redirect_uri,
+            "server_metadata_url": server_metadata_url
         }
 
     @classmethod
     def is_oauth_configured(cls) -> bool:
+        """Returns True if Google OAuth credentials are present in st.secrets or environment."""
+        try:
+            if hasattr(st, "secrets") and "auth" in st.secrets:
+                auth_sec = st.secrets["auth"]
+                if hasattr(auth_sec, "get"):
+                    if auth_sec.get("client_id") or auth_sec.get("google_client_id"):
+                        return True
+        except Exception:
+            pass
         cfg = cls.get_oauth_config()
-        return bool(cfg["client_id"] and cfg["client_secret"])
+        return bool(cfg["client_id"])
+
+    @classmethod
+    def login(cls, provider: str = "google") -> bool:
+        """Triggers Streamlit native authentication if available."""
+        try:
+            if hasattr(st, "login"):
+                st.login()
+                return True
+        except Exception:
+            try:
+                st.login(provider)
+                return True
+            except Exception:
+                pass
+        return False
 
     @classmethod
     def get_google_auth_url(cls, state: str = "nexus_auth") -> Optional[str]:
@@ -109,6 +135,9 @@ class AuthService:
     @classmethod
     def exchange_code_for_profile(cls, code: str) -> Tuple[bool, Optional[PlayerProfile], str]:
         """Exchanges authorization code for Google profile data using standard HTTPS request."""
+        if not cls.is_oauth_configured():
+            return False, None, "Google OAuth is not configured on this deployment."
+
         cfg = cls.get_oauth_config()
         if not cfg["client_id"] or not cfg["client_secret"]:
             return False, None, "Google OAuth is not configured on this deployment."
@@ -167,46 +196,84 @@ class AuthService:
             return False, None, f"OAuth token exchange error: {str(ex)}"
 
     @classmethod
-    def check_streamlit_native_auth(cls) -> Optional[PlayerProfile]:
-        """Checks for Streamlit 1.39+ Native Auth (st.user)."""
+    def is_logged_in(cls) -> bool:
+        """Returns True if the user is authenticated via Streamlit native auth."""
         try:
             if hasattr(st, "user") and st.user is not None:
+                if hasattr(st.user, "get"):
+                    if st.user.get("is_logged_in", False):
+                        return True
                 if getattr(st.user, "is_logged_in", False):
-                    email = getattr(st.user, "email", None) or "agent@nexus.ai"
-                    provider_id = getattr(st.user, "id", None) or getattr(st.user, "sub", None) or email
-                    name = getattr(st.user, "name", None) or email.split("@")[0]
-                    picture = getattr(st.user, "picture", None) or getattr(st.user, "avatar_url", None)
-                    return PlayerProfile(
-                        id=None,
-                        provider_user_id=str(provider_id),
-                        email=str(email),
-                        display_name=str(name),
-                        avatar_url=picture,
-                        is_authenticated=True
-                    )
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @classmethod
+    def check_streamlit_native_auth(cls) -> Optional[PlayerProfile]:
+        """Extracts PlayerProfile from Streamlit Native Auth (st.user)."""
+        try:
+            if cls.is_logged_in():
+                def _get(key, default=None):
+                    try:
+                        if hasattr(st.user, "get"):
+                            val = st.user.get(key)
+                            if val is not None:
+                                return val
+                    except Exception:
+                        pass
+                    try:
+                        val = getattr(st.user, key, default)
+                        if val is not None:
+                            return val
+                    except Exception:
+                        pass
+                    return default
+
+                email = _get("email", "agent@nexus.ai")
+                provider_id = _get("sub") or _get("id") or email
+                name = _get("name") or _get("given_name") or (str(email).split("@")[0] if "@" in str(email) else "Agent")
+                picture = _get("picture") or _get("avatar_url")
+
+                return PlayerProfile(
+                    id=None,
+                    provider_user_id=str(provider_id),
+                    email=str(email),
+                    display_name=str(name),
+                    avatar_url=picture,
+                    access_token=None,
+                    is_authenticated=True
+                )
         except Exception:
             pass
         return None
 
     @classmethod
     def get_current_user(cls) -> Optional[PlayerProfile]:
-        """Retrieves active authenticated player from Streamlit session state or native auth."""
-        # 1. Check session state
-        if "authenticated_player" in st.session_state and st.session_state.authenticated_player:
-            player_dict = st.session_state.authenticated_player
-            return PlayerProfile(
-                id=player_dict.get("id"),
-                provider_user_id=player_dict.get("provider_user_id", ""),
-                email=player_dict.get("email", ""),
-                display_name=player_dict.get("display_name", "Agent"),
-                avatar_url=player_dict.get("avatar_url"),
-                is_authenticated=player_dict.get("is_authenticated", True)
-            )
+        """Retrieves active authenticated player from Streamlit native auth or session state."""
+        if not cls.is_logged_in():
+            # Check if mock or testing session state exists
+            if "authenticated_player" in st.session_state and st.session_state.authenticated_player:
+                player_dict = st.session_state.authenticated_player
+                if isinstance(player_dict, dict) and player_dict.get("is_authenticated"):
+                    return PlayerProfile(
+                        id=player_dict.get("id"),
+                        provider_user_id=player_dict.get("provider_user_id", ""),
+                        email=player_dict.get("email", ""),
+                        display_name=player_dict.get("display_name", "Agent"),
+                        avatar_url=player_dict.get("avatar_url"),
+                        access_token=player_dict.get("access_token"),
+                        is_authenticated=True
+                    )
+            return None
 
-        # 2. Check native auth
+        # Extract from Streamlit native auth
         native_user = cls.check_streamlit_native_auth()
         if native_user:
-            st.session_state.authenticated_player = native_user.to_dict()
+            if "authenticated_player" in st.session_state and isinstance(st.session_state.authenticated_player, dict):
+                cached = st.session_state.authenticated_player
+                if cached.get("provider_user_id") == native_user.provider_user_id and cached.get("id"):
+                    native_user.id = cached.get("id")
             return native_user
 
         return None

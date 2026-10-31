@@ -45,3 +45,6 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+
+
+.streamlit/secrets.toml

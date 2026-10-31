@@ -1,235 +1,215 @@
 """
-NEXUS AI REASONING WAR (V2) - Centralized Game Scoring Engine
-Calculates deterministic scores and itemized audit breakdowns for all 5 games:
-1. Sudoku
-2. Cyber Sokoban
-3. Laser Mirror Routing
-4. Circuit Minesweeper
-5. Tactical Battle Arena
+NEXUS AI REASONING WAR — Centralized Game Scoring Engine
+Universal, Deterministic Time-Based Scoring:
+    SCORE = max(0, 10000 - (elapsed_seconds * 10))
+
+Principles:
+- Lower completion time = Higher score.
+- Exactly reproducible: The same elapsed time always produces the exact same score.
+- Zero randomness, zero artificial bonuses, zero fake multipliers.
+- Unsolved / incomplete attempts receive a score of 0.
+- Raw gameplay telemetry (moves, pushes, rotations, safe cells, mistakes, hints, seed)
+  is preserved in the record and JSONB payload for deep game statistics.
 """
 
 from typing import Dict, Any, Optional
 
 
 class ScoringEngine:
-    """Centralized, deterministic scoring engine with game-specific formula rules."""
+    """Universal deterministic scoring engine for all NEXUS reasoning games."""
 
-    DIFFICULTY_MULTIPLIERS = {
-        "easy": 1.0,
-        "beginner": 1.0,
-        "medium": 1.5,
-        "intermediate": 1.5,
-        "hard": 2.0,
-        "expert": 2.5,
-        "nightmare": 3.0
+    BASE_SCORE = 10000
+    TIME_PENALTY_PER_SECOND = 10
+
+    DIFFICULTY_DESCRIPTIONS = {
+        "easy": "Standard Operative Protocol",
+        "beginner": "Standard Operative Protocol",
+        "medium": "Advanced Tactical Matrix",
+        "intermediate": "Advanced Tactical Matrix",
+        "hard": "Expert Cyber Warfare",
+        "expert": "Elite Neural Challenge",
+        "nightmare": "Singularity Vector"
     }
 
     @classmethod
     def get_difficulty_multiplier(cls, difficulty: str) -> float:
-        return cls.DIFFICULTY_MULTIPLIERS.get(str(difficulty).lower(), 1.0)
+        """
+        Returns 1.0 (difficulty is descriptive for baseline competitive leaderboards).
+        No hidden score inflation.
+        """
+        return 1.0
+
+    @classmethod
+    def compute_formula(cls, elapsed_seconds: int, solved: bool = True) -> int:
+        """
+        Core universal formula:
+            SCORE = max(0, 10000 - (elapsed_seconds * 10))
+        """
+        if not solved:
+            return 0
+        t = max(0, int(elapsed_seconds))
+        penalty = t * cls.TIME_PENALTY_PER_SECOND
+        return max(0, cls.BASE_SCORE - penalty)
 
     @classmethod
     def calculate_sudoku_score(cls,
-                               difficulty: str,
-                               solved: bool,
-                               time_seconds: int,
+                               difficulty: str = "medium",
+                               solved: bool = True,
+                               time_seconds: int = 0,
                                mistakes: int = 0,
                                hints: int = 0,
+                               hints_used: int = 0,
+                               seed: int = 0,
                                **kwargs) -> Dict[str, Any]:
-        mult = cls.get_difficulty_multiplier(difficulty)
-        if not solved:
-            return {
-                "total_score": 0,
-                "base_score": 0,
-                "difficulty_multiplier": mult,
-                "speed_bonus": 0,
-                "efficiency_bonus": 0,
-                "mistake_penalty": 0,
-                "hint_penalty": 0,
-                "solved": False,
-                "summary": "Puzzle not completed."
-            }
+        """Calculates deterministic score and telemetry for Sudoku."""
+        elapsed = max(0, int(time_seconds))
+        total_score = cls.compute_formula(elapsed, solved=solved)
+        time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if solved else 0
+        h_used = hints or hints_used
 
-        base = int(1000 * mult)
-        speed_bonus = max(0, int(1800 - time_seconds))
-        mistake_penalty = int(mistakes * 150)
-        hint_penalty = int(hints * 200)
-
-        total = max(0, base + speed_bonus - mistake_penalty - hint_penalty)
         return {
-            "total_score": total,
-            "base_score": base,
-            "difficulty_multiplier": mult,
-            "speed_bonus": speed_bonus,
-            "efficiency_bonus": 0,
-            "mistake_penalty": mistake_penalty,
-            "hint_penalty": hint_penalty,
-            "solved": True,
-            "summary": f"Base {base} + Speed {speed_bonus} - Mistakes {mistake_penalty} - Hints {hint_penalty}"
+            "game": "sudoku",
+            "total_score": total_score,
+            "base_score": cls.BASE_SCORE if solved else 0,
+            "time_penalty": time_penalty,
+            "elapsed_seconds": elapsed,
+            "difficulty": str(difficulty).lower(),
+            "difficulty_multiplier": 1.0,
+            "mistakes": int(mistakes),
+            "hints_used": int(h_used),
+            "seed": int(seed) if seed else None,
+            "solved": bool(solved),
+            "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} ({elapsed}s × 10) = {total_score:,}" if solved else "Protocol incomplete (0 pts)"
         }
 
     @classmethod
     def calculate_sokoban_score(cls,
-                                difficulty: str,
-                                solved: bool,
-                                time_seconds: int,
+                                difficulty: str = "medium",
+                                solved: bool = True,
+                                time_seconds: int = 0,
                                 moves: int = 0,
                                 pushes: int = 0,
+                                target_moves: Optional[int] = None,
+                                optimal_moves: Optional[int] = None,
+                                seed: int = 0,
                                 **kwargs) -> Dict[str, Any]:
-        mult = cls.get_difficulty_multiplier(difficulty)
-        if not solved:
-            return {
-                "total_score": 0,
-                "base_score": 0,
-                "difficulty_multiplier": mult,
-                "speed_bonus": 0,
-                "move_efficiency_bonus": 0,
-                "push_efficiency_bonus": 0,
-                "solved": False,
-                "summary": "Warehouse puzzle not completed."
-            }
+        """Calculates deterministic score and telemetry for Cyber Sokoban."""
+        elapsed = max(0, int(time_seconds))
+        total_score = cls.compute_formula(elapsed, solved=solved)
+        time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if solved else 0
+        t_moves = target_moves or optimal_moves or 20
 
-        base = int(1200 * mult)
-        target_moves = {"easy": 10, "medium": 20, "hard": 30, "expert": 40, "nightmare": 50}.get(str(difficulty).lower(), 20)
-        move_efficiency = max(0, int((target_moves * 2 - moves) * 20))
-        push_efficiency = max(0, int((target_moves - pushes) * 15))
-        speed_bonus = max(0, int(600 - time_seconds))
-
-        total = max(0, base + move_efficiency + push_efficiency + speed_bonus)
         return {
-            "total_score": total,
-            "base_score": base,
-            "difficulty_multiplier": mult,
-            "speed_bonus": speed_bonus,
-            "move_efficiency_bonus": move_efficiency,
-            "push_efficiency_bonus": push_efficiency,
-            "solved": True,
-            "summary": f"Base {base} + MoveEff {move_efficiency} + PushEff {push_efficiency} + Speed {speed_bonus}"
+            "game": "sokoban",
+            "total_score": total_score,
+            "base_score": cls.BASE_SCORE if solved else 0,
+            "time_penalty": time_penalty,
+            "elapsed_seconds": elapsed,
+            "difficulty": str(difficulty).lower(),
+            "difficulty_multiplier": 1.0,
+            "moves": int(moves),
+            "pushes": int(pushes),
+            "target_moves": int(t_moves),
+            "seed": int(seed) if seed else None,
+            "solved": bool(solved),
+            "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} ({elapsed}s × 10) = {total_score:,}" if solved else "Protocol incomplete (0 pts)"
         }
 
     @classmethod
     def calculate_laser_score(cls,
-                              difficulty: str,
-                              solved: bool,
-                              time_seconds: int,
+                              difficulty: str = "medium",
+                              solved: bool = True,
+                              time_seconds: int = 0,
                               rotations: int = 0,
+                              moves: int = 0,
+                              seed: int = 0,
                               **kwargs) -> Dict[str, Any]:
-        mult = cls.get_difficulty_multiplier(difficulty)
-        if not solved:
-            return {
-                "total_score": 0,
-                "base_score": 0,
-                "difficulty_multiplier": mult,
-                "speed_bonus": 0,
-                "rotation_efficiency_bonus": 0,
-                "solved": False,
-                "summary": "Laser matrix not energized."
-            }
+        """Calculates deterministic score and telemetry for Laser Mirror Routing."""
+        elapsed = max(0, int(time_seconds))
+        total_score = cls.compute_formula(elapsed, solved=solved)
+        time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if solved else 0
+        r_count = rotations or moves
 
-        base = int(1000 * mult)
-        rotation_efficiency = max(0, int((20 - rotations) * 25))
-        speed_bonus = max(0, int(600 - time_seconds))
-
-        total = max(0, base + rotation_efficiency + speed_bonus)
         return {
-            "total_score": total,
-            "base_score": base,
-            "difficulty_multiplier": mult,
-            "speed_bonus": speed_bonus,
-            "rotation_efficiency_bonus": rotation_efficiency,
-            "solved": True,
-            "summary": f"Base {base} + RotationEff {rotation_efficiency} + Speed {speed_bonus}"
+            "game": "laser",
+            "total_score": total_score,
+            "base_score": cls.BASE_SCORE if solved else 0,
+            "time_penalty": time_penalty,
+            "elapsed_seconds": elapsed,
+            "difficulty": str(difficulty).lower(),
+            "difficulty_multiplier": 1.0,
+            "rotations": int(r_count),
+            "seed": int(seed) if seed else None,
+            "solved": bool(solved),
+            "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} ({elapsed}s × 10) = {total_score:,}" if solved else "Protocol incomplete (0 pts)"
         }
 
     @classmethod
     def calculate_minesweeper_score(cls,
-                                    difficulty: str,
-                                    solved: bool,
-                                    time_seconds: int,
+                                    difficulty: str = "medium",
+                                    solved: bool = True,
+                                    time_seconds: int = 0,
                                     remaining_lives: int = 3,
                                     safe_cleared: int = 0,
+                                    safe_cells_cleared: int = 0,
+                                    seed: int = 0,
                                     **kwargs) -> Dict[str, Any]:
-        mult = cls.get_difficulty_multiplier(difficulty)
-        if not solved or remaining_lives <= 0:
-            return {
-                "total_score": 0,
-                "base_score": 0,
-                "difficulty_multiplier": mult,
-                "speed_bonus": 0,
-                "life_preservation_bonus": 0,
-                "safe_nodes_bonus": 0,
-                "solved": False,
-                "summary": "Circuit breaker overloaded (0 lives remaining)."
-            }
+        """Calculates deterministic score and telemetry for Circuit Minesweeper."""
+        elapsed = max(0, int(time_seconds))
+        is_completed = bool(solved and remaining_lives > 0)
+        total_score = cls.compute_formula(elapsed, solved=is_completed)
+        time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if is_completed else 0
+        s_cleared = safe_cleared or safe_cells_cleared
 
-        base = int(1000 * mult)
-        life_bonus = int(remaining_lives * 250)
-        safe_nodes_bonus = int(safe_cleared * 15)
-        speed_bonus = max(0, int(600 - time_seconds))
-
-        total = max(0, base + life_bonus + safe_nodes_bonus + speed_bonus)
         return {
-            "total_score": total,
-            "base_score": base,
-            "difficulty_multiplier": mult,
-            "speed_bonus": speed_bonus,
-            "life_preservation_bonus": life_bonus,
-            "safe_nodes_bonus": safe_nodes_bonus,
-            "solved": True,
-            "summary": f"Base {base} + Lives {life_bonus} + SafeCleared {safe_nodes_bonus} + Speed {speed_bonus}"
+            "game": "minesweeper",
+            "total_score": total_score,
+            "base_score": cls.BASE_SCORE if is_completed else 0,
+            "time_penalty": time_penalty,
+            "elapsed_seconds": elapsed,
+            "difficulty": str(difficulty).lower(),
+            "difficulty_multiplier": 1.0,
+            "remaining_lives": int(remaining_lives),
+            "safe_cells_cleared": int(s_cleared),
+            "seed": int(seed) if seed else None,
+            "solved": is_completed,
+            "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} ({elapsed}s × 10) = {total_score:,}" if is_completed else "Circuit overload / incomplete (0 pts)"
         }
 
     @classmethod
     def calculate_battle_score(cls,
-                               difficulty: str,
-                               outcome: str,
+                               difficulty: str = "medium",
+                               outcome: str = "win",
                                moves: int = 0,
                                time_seconds: int = 0,
+                               solved: bool = True,
                                **kwargs) -> Dict[str, Any]:
-        mult = cls.get_difficulty_multiplier(difficulty)
+        """Calculates deterministic score and telemetry for Tactical Battle Arena."""
+        elapsed = max(0, int(time_seconds))
         outcome_str = str(outcome).lower()
-        if outcome_str in ("loss", "defeat", "ai_win"):
-            return {
-                "total_score": 0,
-                "base_score": 0,
-                "difficulty_multiplier": mult,
-                "move_economy_bonus": 0,
-                "outcome": "loss",
-                "solved": False,
-                "summary": "Defeated by AEGIS Tactical AI."
-            }
+        is_win_or_draw = outcome_str in ("win", "victory", "player_win", "draw", "stalemate") and solved
+        is_victory = outcome_str in ("win", "victory", "player_win") and solved
 
-        if outcome_str in ("draw", "stalemate"):
-            base = int(500 * mult)
-            move_economy = max(0, int((30 - moves) * 15))
-            total = base + move_economy
-            return {
-                "total_score": total,
-                "base_score": base,
-                "difficulty_multiplier": mult,
-                "move_economy_bonus": move_economy,
-                "outcome": "draw",
-                "solved": True,
-                "summary": f"Draw Base {base} + MoveEconomy {move_economy}"
-            }
+        total_score = cls.compute_formula(elapsed, solved=is_victory)
+        time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if is_victory else 0
 
-        # Win
-        base = int(1500 * mult)
-        move_economy = max(0, int((30 - moves) * 35))
-        total = base + move_economy
         return {
-            "total_score": total,
-            "base_score": base,
-            "difficulty_multiplier": mult,
-            "move_economy_bonus": move_economy,
-            "outcome": "win",
-            "solved": True,
-            "summary": f"Victory Base {base} + MoveEconomy {move_economy}"
+            "game": "battle",
+            "total_score": total_score,
+            "base_score": cls.BASE_SCORE if is_victory else 0,
+            "time_penalty": time_penalty,
+            "elapsed_seconds": elapsed,
+            "difficulty": str(difficulty).lower(),
+            "difficulty_multiplier": 1.0,
+            "moves": int(moves),
+            "outcome": outcome_str,
+            "solved": is_victory,
+            "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} ({elapsed}s × 10) = {total_score:,}" if is_victory else f"Outcome: {outcome_str.upper()} (0 pts)"
         }
 
     @classmethod
     def calculate_score(cls, game: str, **kwargs) -> Dict[str, Any]:
-        """Routes to the game-specific scoring calculation."""
+        """Universal router for deterministic game scoring."""
         g = str(game).lower()
         if "sudoku" in g:
             return cls.calculate_sudoku_score(**kwargs)
@@ -242,12 +222,19 @@ class ScoringEngine:
         elif "battle" in g:
             return cls.calculate_battle_score(**kwargs)
         else:
-            mult = cls.get_difficulty_multiplier(kwargs.get("difficulty", "medium"))
-            base = int(1000 * mult) if kwargs.get("solved", False) else 0
+            elapsed = max(0, int(kwargs.get("time_seconds", kwargs.get("elapsed_seconds", 0))))
+            solved = bool(kwargs.get("solved", True))
+            total_score = cls.compute_formula(elapsed, solved=solved)
+            time_penalty = elapsed * cls.TIME_PENALTY_PER_SECOND if solved else 0
             return {
-                "total_score": base,
-                "base_score": base,
-                "difficulty_multiplier": mult,
-                "solved": kwargs.get("solved", False),
-                "summary": f"Standard calculation: {base}"
+                "game": g,
+                "total_score": total_score,
+                "base_score": cls.BASE_SCORE if solved else 0,
+                "time_penalty": time_penalty,
+                "elapsed_seconds": elapsed,
+                "difficulty": str(kwargs.get("difficulty", "medium")).lower(),
+                "difficulty_multiplier": 1.0,
+                "solved": solved,
+                "summary": f"Base {cls.BASE_SCORE:,} - Time Penalty {time_penalty:,} = {total_score:,}" if solved else "Incomplete (0 pts)"
             }
+

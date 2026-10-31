@@ -63,11 +63,11 @@ CREATE INDEX IF NOT EXISTS idx_game_stats_player ON public.game_statistics(playe
 
 
 -- 4. ROLE GRANTS & ACCESS CONTROL
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.players TO anon;
-GRANT ALL ON TABLE public.players TO authenticated;
-GRANT ALL ON TABLE public.game_scores TO authenticated;
-GRANT ALL ON TABLE public.game_statistics TO authenticated;
+GRANT ALL ON TABLE public.players TO authenticated, service_role;
+GRANT ALL ON TABLE public.game_scores TO authenticated, service_role;
+GRANT ALL ON TABLE public.game_statistics TO authenticated, service_role;
 REVOKE INSERT, UPDATE, DELETE ON TABLE public.game_scores FROM anon;
 REVOKE INSERT, UPDATE, DELETE ON TABLE public.game_statistics FROM anon;
 
